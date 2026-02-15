@@ -18,11 +18,21 @@ const MakePhoneCallParams = Type.Object({
   to: Type.String({ description: "Phone number to call in E.164 format (e.g. +14155551234)" }),
   task: Type.String({
     description:
-      "Plain English description of what to accomplish on this call. Be specific — include names, dates, " +
-      "times, quantities, questions to ask, or any details the caller needs. " +
-      "Examples: 'Ask what their hours are tonight', 'Make a reservation for 4 people on Friday at 7pm " +
-      "under the name Connor', 'Ask if they have the iPhone 16 Pro in stock and what the price is', " +
-      "'Schedule a haircut appointment for Saturday morning'",
+      "Brief summary of the call objective (e.g. 'Make a dinner reservation', 'Ask about store hours'). " +
+      "This is logged for tracking — the detailed instructions go in systemPrompt.",
+  }),
+  systemPrompt: Type.String({
+    description:
+      "System prompt for the AI voice agent that will be on the phone call. " +
+      "YOU are writing instructions for a DIFFERENT AI that will actually speak on the call. " +
+      "Write it as a persona/role description in second person. Include:\n" +
+      "- Who they are and why they're calling (e.g. 'You are calling Tony's Pizza to make a reservation')\n" +
+      "- Specific details: names, dates, times, party sizes, questions to ask, preferences\n" +
+      "- How to handle edge cases (e.g. 'If they're fully booked, ask about tomorrow instead')\n" +
+      "- Any info to give if asked (e.g. 'Your name is Connor, phone number is...')\n" +
+      "Example: 'You are calling a restaurant to make a dinner reservation. You need a table for 4 " +
+      "on Friday at 7pm under the name Connor. If 7pm is unavailable, you can do anytime between 6-8pm. " +
+      "Ask if they have outdoor seating available.'",
   }),
 });
 
@@ -63,6 +73,7 @@ let config: PluginConfig;
 let callManager: CallManager;
 let twilioClient: TwilioClient;
 let server: VoiceServer;
+let agentName: string;
 
 const voiceRealtimePlugin = {
   id: "openclaw-voice-gpt-realtime",
@@ -77,6 +88,12 @@ const voiceRealtimePlugin = {
     callManager = new CallManager();
     twilioClient = new TwilioClient(config);
     server = new VoiceServer(config, callManager, twilioClient);
+
+    // Resolve the agent's display name from OpenClaw config
+    const agents = api.config?.agents?.list as Array<{ id: string; identity?: { name?: string } }> | undefined;
+    const defaultAgent = agents?.find((a) => a.id === "main") || agents?.[0];
+    agentName = defaultAgent?.identity?.name?.trim() || "";
+    server.setAgentName(agentName);
 
     const logger = api.logger as { info: (m: string) => void; warn: (m: string) => void; error: (m: string) => void };
 
@@ -202,15 +219,15 @@ const voiceRealtimePlugin = {
 };
 
 async function initiateCall(
-  params: { to: string; task: string },
+  params: { to: string; task: string; systemPrompt?: string },
   logger: { info: (m: string) => void; error: (m: string) => void }
 ): Promise<{ success: boolean; callId: string; message: string; error?: string }> {
-  const { to, task } = params;
+  const { to, task, systemPrompt } = params;
 
   const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   logger.info(`[voice-rt] Initiating call ${callId} to ${to} — task: ${task}`);
 
-  const callContext: CallContext = { task, direction: "outbound" };
+  const callContext: CallContext = { task, direction: "outbound", agentName, systemPrompt };
 
   server.setCallContext(callId, callContext);
   callManager.createCall(callId, to, config.fromNumber, task);

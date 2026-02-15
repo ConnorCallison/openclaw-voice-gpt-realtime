@@ -16,6 +16,7 @@ export class VoiceServer {
   private wss: WebSocketServer | null = null;
   private bridges = new Map<string, RealtimeBridge>();
   private listening = false;
+  private agentName = "";
   // Pending call contexts awaiting Twilio stream connection
   private pendingCallContexts = new Map<string, CallContext>();
 
@@ -23,6 +24,10 @@ export class VoiceServer {
     this.config = config;
     this.callManager = callManager;
     this.twilioClient = twilioClient;
+  }
+
+  setAgentName(name: string): void {
+    this.agentName = name;
   }
 
   async start(): Promise<void> {
@@ -179,6 +184,7 @@ export class VoiceServer {
       this.pendingCallContexts.set(callId, {
         task: "Inbound call — answer and help the caller with whatever they need.",
         direction: "inbound",
+        agentName: this.agentName,
         greeting: this.config.inbound.greeting,
         inboundSystemPrompt: this.config.inbound.systemPrompt,
       });
