@@ -21,9 +21,9 @@
     "url": "https://github.com/connorcallison/openclaw-voice-gpt-realtime.git"
   },
   "openclaw": {
-    "extensions": {
-      "plugin": "./index.ts"
-    }
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "scripts": {
     "dev": "bun run --watch index.ts",
@@ -31,6 +31,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@sinclair/typebox": "0.34.48",
     "twilio": "^5.4.0",
     "ws": "^8.18.0",
     "zod": "^3.24.0"
