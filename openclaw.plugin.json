@@ -1,4 +1,5 @@
 {
+  "id": "openclaw-voice-gpt-realtime",
   "name": "openclaw-voice-gpt-realtime",
   "displayName": "Voice Calls (OpenAI Realtime)",
   "description": "Ultra-low-latency AI phone calls powered by OpenAI's Realtime API. Single-model speech-to-speech with ~200-300ms latency.",
