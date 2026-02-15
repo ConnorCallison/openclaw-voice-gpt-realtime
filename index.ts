@@ -21,7 +21,7 @@ const MakePhoneCallParams = Type.Object({
       "Brief one-line summary of the call objective for logging (e.g. 'Dinner reservation at Tony's', " +
       "'Check if they have iPhone 16 in stock'). The real instructions go in systemPrompt.",
   }),
-  systemPrompt: Type.Optional(Type.String({
+  systemPrompt: Type.String({
     description:
       "Instructions for the AI voice agent that will speak on this phone call. " +
       "You are writing a prompt for a SEPARATE AI — it will read these instructions, then have a real " +
@@ -61,7 +61,7 @@ const MakePhoneCallParams = Type.Object({
 
       "BAD — too vague:\n" +
       "\"Call the restaurant and make a reservation.\"",
-  })),
+  }),
 });
 
 type MakePhoneCallParamsType = Static<typeof MakePhoneCallParams>;
