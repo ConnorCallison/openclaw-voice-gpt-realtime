@@ -48,7 +48,7 @@
             "type": "string",
             "title": "Model",
             "description": "OpenAI Realtime model to use",
-            "default": "gpt-4o-realtime-preview"
+            "default": "gpt-realtime"
           },
           "voice": {
             "type": "string",

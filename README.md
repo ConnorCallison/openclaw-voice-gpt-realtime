@@ -19,14 +19,14 @@ User (via iMessage/CLI) --> OpenClaw Agent --> make_phone_call tool
                                                 |
                               Twilio WebSocket <--> Plugin WebSocket Server
                                                 |
-                              OpenAI Realtime API WebSocket (gpt-4o-realtime)
+                              OpenAI Realtime API WebSocket (gpt-realtime)
                                    g711_ulaw passthrough, zero transcoding
                                    Function calling (DTMF, end_call, report)
 ```
 
 **Before (old pipeline):** Twilio audio -> OpenAI STT -> LLM (gpt-4.1-mini) -> ElevenLabs TTS -> Twilio audio (~500-1000ms+)
 
-**After (this plugin):** Twilio audio -> OpenAI Realtime (gpt-4o-realtime) -> Twilio audio (~200-300ms)
+**After (this plugin):** Twilio audio -> OpenAI Realtime (gpt-realtime) -> Twilio audio (~200-300ms)
 
 ## Features
 
@@ -72,7 +72,7 @@ Add to your `openclaw.json`:
           "fromNumber": "+17077024785",
           "openai": {
             "apiKey": "sk-proj-...",
-            "model": "gpt-4o-realtime-preview",
+            "model": "gpt-realtime",
             "voice": "coral"
           },
           "publicUrl": "https://your-domain.com",
@@ -144,7 +144,7 @@ openclaw voicecall-rt call +14155551234 \
 | `twilio.authToken` | string | required | Twilio Auth Token |
 | `fromNumber` | string | required | Twilio phone number (E.164) |
 | `openai.apiKey` | string | required | OpenAI API key |
-| `openai.model` | string | `gpt-4o-realtime-preview` | OpenAI Realtime model |
+| `openai.model` | string | `gpt-realtime` | OpenAI Realtime model |
 | `openai.voice` | string | `coral` | AI voice |
 | `vad.type` | string | `semantic_vad` | VAD type |
 | `vad.eagerness` | string | `medium` | VAD eagerness |
@@ -182,8 +182,8 @@ Per-call pricing (approximate):
 
 | Component | Cost | Notes |
 |-----------|------|-------|
-| OpenAI Realtime (audio input) | ~$0.06/min | gpt-4o-realtime |
-| OpenAI Realtime (audio output) | ~$0.24/min | gpt-4o-realtime |
+| OpenAI Realtime (audio input) | ~$0.06/min | gpt-realtime |
+| OpenAI Realtime (audio output) | ~$0.24/min | gpt-realtime |
 | Twilio voice | ~$0.014/min | Outbound US |
 | **Total** | **~$0.31/min** | ~$1.55 for a 5-minute call |
 
