@@ -29,6 +29,14 @@ export const CallsConfigSchema = z.object({
   enableAmd: z.boolean().default(true),
 });
 
+export const InboundConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  policy: z.enum(["disabled", "open", "allowlist"]).default("disabled"),
+  allowFrom: z.array(z.string()).default([]),
+  greeting: z.string().default("Hey! What's up?"),
+  systemPrompt: z.string().optional(),
+});
+
 export const PluginConfigSchema = z.object({
   twilio: TwilioConfigSchema,
   fromNumber: z.string().regex(/^\+[1-9]\d{1,14}$/, "Phone number must be E.164 format"),
@@ -37,6 +45,7 @@ export const PluginConfigSchema = z.object({
   publicUrl: z.string().url("Public URL must be a valid URL"),
   server: ServerConfigSchema.default({}),
   calls: CallsConfigSchema.default({}),
+  inbound: InboundConfigSchema.default({}),
   debug: z.boolean().default(false),
 });
 

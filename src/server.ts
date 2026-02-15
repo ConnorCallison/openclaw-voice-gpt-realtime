@@ -6,7 +6,7 @@ import type { CallManager } from "./call-manager.ts";
 import type { TwilioClient } from "./twilio-client.ts";
 import { RealtimeBridge } from "./realtime-bridge.ts";
 import { checkStatus } from "./status.ts";
-import type { CallContext, CallIntent } from "./prompts.ts";
+import type { CallContext } from "./prompts.ts";
 
 export class VoiceServer {
   private config: PluginConfig;
@@ -149,8 +149,58 @@ export class VoiceServer {
   }
 
   private handleVoiceAnswer(params: URLSearchParams, res: import("node:http").ServerResponse): void {
-    const callId = params.get("callId") || "unknown";
+    const direction = params.get("Direction");
     const callSid = params.get("CallSid");
+    const from = params.get("From") || "";
+    const to = params.get("To") || "";
+
+    // Check if this is an inbound call (no callId in query = not initiated by us)
+    const queryCallId = params.get("callId");
+
+    if (!queryCallId && direction === "inbound") {
+      // Inbound call — check policy
+      if (!this.shouldAcceptInbound(from)) {
+        // Reject: return empty TwiML that hangs up
+        res.writeHead(200, { "Content-Type": "application/xml" });
+        res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+        return;
+      }
+
+      // Accept inbound call
+      const callId = `inbound_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+      this.callManager.createCall(callId, to, from, "Inbound call", "inbound");
+      if (callSid) {
+        this.callManager.setCallSid(callId, callSid);
+      }
+      this.callManager.updateStatus(callId, "in-progress");
+
+      // Set inbound call context
+      this.pendingCallContexts.set(callId, {
+        task: "Inbound call — answer and help the caller with whatever they need.",
+        direction: "inbound",
+        greeting: this.config.inbound.greeting,
+        inboundSystemPrompt: this.config.inbound.systemPrompt,
+      });
+
+      const wsUrl = `${this.config.publicUrl.replace(/^http/, "ws")}/voice/realtime-stream?callId=${encodeURIComponent(callId)}`;
+
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${wsUrl}">
+      <Parameter name="callId" value="${callId}" />
+    </Stream>
+  </Connect>
+</Response>`;
+
+      res.writeHead(200, { "Content-Type": "application/xml" });
+      res.end(twiml);
+      return;
+    }
+
+    // Outbound call (initiated by us)
+    const callId = queryCallId || "unknown";
 
     if (callSid) {
       this.callManager.setCallSid(callId, callSid);
@@ -171,6 +221,22 @@ export class VoiceServer {
 
     res.writeHead(200, { "Content-Type": "application/xml" });
     res.end(twiml);
+  }
+
+  private shouldAcceptInbound(from: string): boolean {
+    const { enabled, policy, allowFrom } = this.config.inbound;
+
+    if (!enabled || policy === "disabled") return false;
+    if (policy === "open") return true;
+    if (policy === "allowlist") {
+      // Normalize: strip spaces, ensure +prefix
+      const normalized = from.replace(/\s/g, "");
+      return allowFrom.some((allowed) => {
+        const normalizedAllowed = allowed.replace(/\s/g, "");
+        return normalized === normalizedAllowed;
+      });
+    }
+    return false;
   }
 
   private handleVoiceStatus(params: URLSearchParams, res: import("node:http").ServerResponse): void {
@@ -228,7 +294,8 @@ export class VoiceServer {
   private handleWebSocket(ws: WebSocket, url: URL): void {
     const callId = url.searchParams.get("callId") || "unknown";
     const callContext = this.pendingCallContexts.get(callId) || {
-      intent: "general_inquiry" as CallIntent,
+      task: "General phone call — ask what they need or answer their questions.",
+      direction: "outbound" as const,
     };
 
     console.log(`[openclaw-voice-gpt-realtime] WebSocket connected for call ${callId}`);

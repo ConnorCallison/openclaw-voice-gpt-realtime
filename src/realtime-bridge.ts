@@ -222,7 +222,19 @@ export class RealtimeBridge {
     this.openaiWs!.send(JSON.stringify(sessionConfig));
     this.debug.logOpenAI("session.update", "configured");
 
-    // Do NOT send response.create — "listen first" behavior
+    if (this.callContext.direction === "inbound" && this.callContext.greeting) {
+      // Inbound: speak the greeting immediately
+      this.openaiWs!.send(
+        JSON.stringify({
+          type: "response.create",
+          response: {
+            modalities: ["text", "audio"],
+            instructions: `Say exactly this greeting to the caller: "${this.callContext.greeting}". Say it naturally and warmly, then wait for their response.`,
+          },
+        })
+      );
+    }
+    // Outbound: do NOT send response.create — "listen first" behavior
     // The model will wait for the callee's greeting via VAD
   }
 
@@ -274,8 +286,9 @@ export class RealtimeBridge {
 
       case "conversation.item.input_audio_transcription.completed":
         if (event.transcript) {
+          const role = this.callContext.direction === "inbound" ? "caller" : "callee";
           this.debug.logOpenAI("input_transcription", event.transcript);
-          this.callManager.addTranscript(this.callId, "callee", event.transcript);
+          this.callManager.addTranscript(this.callId, role, event.transcript);
         }
         break;
 

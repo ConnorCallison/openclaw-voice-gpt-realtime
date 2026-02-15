@@ -12,39 +12,18 @@ import { CallManager } from "./src/call-manager.ts";
 import { TwilioClient } from "./src/twilio-client.ts";
 import { VoiceServer } from "./src/server.ts";
 import { checkStatus } from "./src/status.ts";
-import type { CallIntent, CallContext } from "./src/prompts.ts";
+import type { CallContext } from "./src/prompts.ts";
 
 const MakePhoneCallParams = Type.Object({
   to: Type.String({ description: "Phone number to call in E.164 format (e.g. +14155551234)" }),
-  intent: Type.Union(
-    [
-      Type.Literal("restaurant_reservation"),
-      Type.Literal("appointment_booking"),
-      Type.Literal("price_inquiry"),
-      Type.Literal("general_inquiry"),
-      Type.Literal("custom"),
-    ],
-    { description: "The purpose of the call, which determines the AI's conversation strategy" }
-  ),
-  context: Type.Optional(
-    Type.Object(
-      {
-        businessName: Type.Optional(Type.String({ description: "Name of the business being called" })),
-        partySize: Type.Optional(Type.Number({ description: "Number of people (for reservations)" })),
-        date: Type.Optional(Type.String({ description: "Preferred date (e.g. 'Friday March 7th')" })),
-        time: Type.Optional(Type.String({ description: "Preferred time (e.g. '7:00 PM')" })),
-        specialRequests: Type.Optional(Type.String({ description: "Any special requests or notes" })),
-        serviceType: Type.Optional(Type.String({ description: "Type of service (for appointments)" })),
-        preferredTimes: Type.Optional(Type.Array(Type.String(), { description: "List of preferred time slots" })),
-        inquirySubject: Type.Optional(Type.String({ description: "What to inquire about" })),
-        userName: Type.Optional(Type.String({ description: "Name to use for the reservation/appointment" })),
-      },
-      { description: "Intent-specific details", additionalProperties: true }
-    )
-  ),
-  customPrompt: Type.Optional(
-    Type.String({ description: "Optional custom system prompt that overrides the default intent-based prompt" })
-  ),
+  task: Type.String({
+    description:
+      "Plain English description of what to accomplish on this call. Be specific — include names, dates, " +
+      "times, quantities, questions to ask, or any details the caller needs. " +
+      "Examples: 'Ask what their hours are tonight', 'Make a reservation for 4 people on Friday at 7pm " +
+      "under the name Connor', 'Ask if they have the iPhone 16 Pro in stock and what the price is', " +
+      "'Schedule a haircut appointment for Saturday morning'",
+  }),
 });
 
 type MakePhoneCallParamsType = Static<typeof MakePhoneCallParams>;
@@ -71,6 +50,11 @@ const voiceRealtimeConfigSchema = {
     "calls.maxDurationSeconds": { label: "Max Call Duration (sec)", advanced: true },
     "calls.timeoutSeconds": { label: "Ring Timeout (sec)", advanced: true },
     "calls.enableAmd": { label: "Answering Machine Detection", advanced: true },
+    "inbound.enabled": { label: "Enable Inbound Calls" },
+    "inbound.policy": { label: "Inbound Policy" },
+    "inbound.allowFrom": { label: "Allowed Callers (E.164)", advanced: true },
+    "inbound.greeting": { label: "Inbound Greeting" },
+    "inbound.systemPrompt": { label: "Inbound System Prompt", advanced: true },
     debug: { label: "Debug Mode" },
   },
 };
@@ -96,7 +80,6 @@ const voiceRealtimePlugin = {
 
     const logger = api.logger as { info: (m: string) => void; warn: (m: string) => void; error: (m: string) => void };
 
-    // Callback when calls complete
     callManager.setOnComplete((callId, record) => {
       logger.info(`[voice-rt] Call ${callId} completed: ${record.outcome?.summary || record.status}`);
     });
@@ -106,10 +89,10 @@ const voiceRealtimePlugin = {
       name: "make_phone_call",
       label: "Make Phone Call",
       description:
-        "Make an outbound phone call to a business on behalf of the user. " +
-        "Uses AI to have a natural phone conversation for reservations, " +
-        "appointments, inquiries, etc. The AI will wait for the other person " +
-        "to answer before speaking, navigate IVR menus, and report the outcome.",
+        "Make an outbound phone call to a business or person. An AI caller will handle the " +
+        "conversation naturally — it can make reservations, ask questions, check hours/pricing/availability, " +
+        "book appointments, or handle any other phone task. Describe exactly what needs to be accomplished " +
+        "in the 'task' field and the AI will carry out the conversation and report back with the result.",
       parameters: MakePhoneCallParams,
       async execute(_toolCallId: string, params: MakePhoneCallParamsType) {
         const result = await initiateCall(params, logger);
@@ -120,7 +103,7 @@ const voiceRealtimePlugin = {
       },
     });
 
-    // Gateway method for programmatic access
+    // Gateway method
     api.registerGatewayMethod(
       "voicecall-rt.call",
       async ({ params, respond }: { params: Record<string, unknown>; respond: (ok: boolean, payload?: unknown) => void }) => {
@@ -149,11 +132,11 @@ const voiceRealtimePlugin = {
       "voicecall-rt.active",
       async ({ respond }: { respond: (ok: boolean, payload?: unknown) => void }) => {
         const active = callManager.getActiveCalls();
-        respond(true, { calls: active.map((c) => ({ callId: c.callId, to: c.to, status: c.status, intent: c.intent })) });
+        respond(true, { calls: active.map((c) => ({ callId: c.callId, to: c.to, status: c.status, task: c.task })) });
       }
     );
 
-    // CLI commands
+    // CLI
     api.registerCli(
       ({ program }: { program: any }) => {
         const root = program
@@ -164,14 +147,9 @@ const voiceRealtimePlugin = {
           .command("call")
           .description("Make an outbound phone call")
           .requiredOption("-n, --number <phone>", "Phone number to call (E.164)")
-          .option("-i, --intent <type>", "Call intent", "general_inquiry")
-          .option("-c, --context <json>", "JSON context object")
-          .action(async (opts: { number: string; intent: string; context?: string }) => {
-            const ctx = opts.context ? JSON.parse(opts.context) : {};
-            const result = await initiateCall(
-              { to: opts.number, intent: opts.intent as CallIntent, context: ctx },
-              logger
-            );
+          .requiredOption("-t, --task <description>", "What to accomplish on the call")
+          .action(async (opts: { number: string; task: string }) => {
+            const result = await initiateCall({ to: opts.number, task: opts.task }, logger);
             console.log(JSON.stringify(result, null, 2));
           });
 
@@ -200,7 +178,7 @@ const voiceRealtimePlugin = {
               console.log("No active calls.");
             } else {
               for (const call of active) {
-                console.log(`  ${call.callId}: ${call.to} (${call.status}) - ${call.intent}`);
+                console.log(`  ${call.callId}: ${call.to} (${call.status})`);
               }
             }
           });
@@ -224,22 +202,18 @@ const voiceRealtimePlugin = {
 };
 
 async function initiateCall(
-  params: { to: string; intent: string; context?: Record<string, unknown>; customPrompt?: string },
+  params: { to: string; task: string },
   logger: { info: (m: string) => void; error: (m: string) => void }
 ): Promise<{ success: boolean; callId: string; message: string; error?: string }> {
-  const { to, intent, context = {}, customPrompt } = params;
+  const { to, task } = params;
 
   const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  logger.info(`[voice-rt] Initiating call ${callId} to ${to} (intent: ${intent})`);
+  logger.info(`[voice-rt] Initiating call ${callId} to ${to} — task: ${task}`);
 
-  const callContext: CallContext = {
-    intent: intent as CallIntent,
-    customPrompt,
-    ...context,
-  };
+  const callContext: CallContext = { task, direction: "outbound" };
 
   server.setCallContext(callId, callContext);
-  callManager.createCall(callId, to, config.fromNumber, intent as CallIntent);
+  callManager.createCall(callId, to, config.fromNumber, task);
 
   try {
     const result = await twilioClient.initiateCall({
@@ -258,7 +232,7 @@ async function initiateCall(
     return {
       success: true,
       callId,
-      message: `Call initiated to ${to}. The AI assistant will handle the conversation and report the outcome. Call ID: ${callId}`,
+      message: `Call initiated to ${to}. The AI caller will handle the conversation and report the outcome. Call ID: ${callId}`,
     };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);

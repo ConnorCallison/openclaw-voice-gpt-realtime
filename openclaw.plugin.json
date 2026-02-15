@@ -120,6 +120,38 @@
           }
         }
       },
+      "inbound": {
+        "type": "object",
+        "title": "Inbound Call Settings",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable receiving inbound phone calls"
+          },
+          "policy": {
+            "type": "string",
+            "enum": ["disabled", "open", "allowlist"],
+            "default": "disabled",
+            "description": "Who can call in: disabled (nobody), open (anyone), allowlist (specific numbers)"
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [],
+            "description": "Phone numbers allowed to call in (E.164 format), used with allowlist policy"
+          },
+          "greeting": {
+            "type": "string",
+            "default": "Hey! What's up?",
+            "description": "What the AI says when it answers an inbound call"
+          },
+          "systemPrompt": {
+            "type": "string",
+            "description": "Custom system prompt for inbound calls (overrides default)"
+          }
+        }
+      },
       "debug": {
         "type": "boolean",
         "title": "Debug Mode",

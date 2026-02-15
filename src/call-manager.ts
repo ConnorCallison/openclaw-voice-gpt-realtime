@@ -1,8 +1,6 @@
 import { mkdirSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { CallIntent } from "./prompts.ts";
-
 const DATA_DIR = join(homedir(), ".openclaw", "voice-calls-realtime");
 const CALLS_FILE = join(DATA_DIR, "calls.jsonl");
 
@@ -11,7 +9,8 @@ export interface CallRecord {
   callSid?: string;
   to: string;
   from: string;
-  intent: CallIntent;
+  task: string;
+  direction: "outbound" | "inbound";
   status: "initiating" | "ringing" | "in-progress" | "completed" | "failed" | "no-answer" | "busy";
   startedAt: number;
   answeredAt?: number;
@@ -46,13 +45,14 @@ export class CallManager {
     this.onComplete = cb;
   }
 
-  createCall(callId: string, to: string, from: string, intent: CallIntent): CallRecord {
+  createCall(callId: string, to: string, from: string, task: string, direction: "outbound" | "inbound" = "outbound"): CallRecord {
     const record: CallRecord = {
       callId,
       to,
       from,
-      intent,
-      status: "initiating",
+      task,
+      direction,
+      status: direction === "inbound" ? "ringing" : "initiating",
       startedAt: Date.now(),
       transcript: [],
     };
@@ -159,7 +159,8 @@ export class CallManager {
       callSid: record.callSid,
       to: record.to,
       from: record.from,
-      intent: record.intent,
+      task: record.task,
+      direction: record.direction,
       status: record.status,
       startedAt: record.startedAt,
       answeredAt: record.answeredAt,
