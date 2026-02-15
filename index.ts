@@ -18,21 +18,49 @@ const MakePhoneCallParams = Type.Object({
   to: Type.String({ description: "Phone number to call in E.164 format (e.g. +14155551234)" }),
   task: Type.String({
     description:
-      "Brief summary of the call objective (e.g. 'Make a dinner reservation', 'Ask about store hours'). " +
-      "This is logged for tracking — the detailed instructions go in systemPrompt.",
+      "Brief one-line summary of the call objective for logging (e.g. 'Dinner reservation at Tony's', " +
+      "'Check if they have iPhone 16 in stock'). The real instructions go in systemPrompt.",
   }),
   systemPrompt: Type.String({
     description:
-      "System prompt for the AI voice agent that will be on the phone call. " +
-      "YOU are writing instructions for a DIFFERENT AI that will actually speak on the call. " +
-      "Write it as a persona/role description in second person. Include:\n" +
-      "- Who they are and why they're calling (e.g. 'You are calling Tony's Pizza to make a reservation')\n" +
-      "- Specific details: names, dates, times, party sizes, questions to ask, preferences\n" +
-      "- How to handle edge cases (e.g. 'If they're fully booked, ask about tomorrow instead')\n" +
-      "- Any info to give if asked (e.g. 'Your name is Connor, phone number is...')\n" +
-      "Example: 'You are calling a restaurant to make a dinner reservation. You need a table for 4 " +
-      "on Friday at 7pm under the name Connor. If 7pm is unavailable, you can do anytime between 6-8pm. " +
-      "Ask if they have outdoor seating available.'",
+      "Instructions for the AI voice agent that will speak on this phone call. " +
+      "You are writing a prompt for a SEPARATE AI — it will read these instructions, then have a real " +
+      "phone conversation with a human. The voice agent has no other context, so include everything it needs.\n\n" +
+
+      "IMPORTANT — write the prompt to produce CASUAL, HUMAN-SOUNDING conversation. " +
+      "The voice agent should sound like a normal person calling, NOT like a corporate AI. " +
+      "Think about how you'd actually talk on the phone — short sentences, filler words are okay, " +
+      "natural reactions. The prompt should encourage this tone.\n\n" +
+
+      "What to include:\n" +
+      "- Who they are and what they want (written in second person)\n" +
+      "- All relevant details: names, dates, times, quantities, preferences, budget, etc.\n" +
+      "- What to ask about or what info to gather\n" +
+      "- Fallback preferences (e.g. 'if Friday doesn't work, try Saturday')\n" +
+      "- Any personal info to share if asked (name, phone number, email, etc.)\n" +
+      "- Tone guidance — remind it to be casual and human\n\n" +
+
+      "GOOD example:\n" +
+      "\"You're calling Tony's Pizza to make a reservation. You want a table for 4 on Friday around 7pm, " +
+      "name is Connor. If 7 doesn't work, anytime between 6 and 8 is fine. Ask if they have outdoor " +
+      "seating. Keep it chill — you're just a guy calling to book a table, not conducting a business meeting.\"\n\n" +
+
+      "GOOD example:\n" +
+      "\"You're calling to ask if they have the iPhone 16 Pro in stock, and if so what colors and how much. " +
+      "If they don't have it, ask when they expect it back in stock. You don't need to buy it right now, " +
+      "just getting info. Be casual about it.\"\n\n" +
+
+      "GOOD example:\n" +
+      "\"You're calling a barbershop to book a haircut for Saturday morning. You're flexible on the exact " +
+      "time — anytime before noon works. Just a regular men's cut. If Saturday is booked, check Sunday. " +
+      "Name is Connor, phone number is 707-555-1234 if they need it.\"\n\n" +
+
+      "BAD — too stiff/robotic:\n" +
+      "\"You are an AI assistant tasked with making a restaurant reservation. Please inquire about " +
+      "availability for a party of four on Friday evening. Request a time slot at 7:00 PM.\"\n\n" +
+
+      "BAD — too vague:\n" +
+      "\"Call the restaurant and make a reservation.\"",
   }),
 });
 
@@ -106,10 +134,13 @@ const voiceRealtimePlugin = {
       name: "make_phone_call",
       label: "Make Phone Call",
       description:
-        "Make an outbound phone call to a business or person. An AI caller will handle the " +
-        "conversation naturally — it can make reservations, ask questions, check hours/pricing/availability, " +
-        "book appointments, or handle any other phone task. Describe exactly what needs to be accomplished " +
-        "in the 'task' field and the AI will carry out the conversation and report back with the result.",
+        "Make an outbound phone call to a real phone number. A voice AI will dial the number and have " +
+        "a natural, human-sounding conversation to accomplish whatever you describe. It can handle any " +
+        "phone task: reservations, appointments, checking hours/prices/availability, asking questions, etc. " +
+        "You MUST write a systemPrompt that tells the voice AI who it is, what it wants, and all the " +
+        "details it needs. Write the prompt like you're briefing a friend who's about to make the call " +
+        "for you — casual, specific, and complete. The voice AI will call, handle the conversation, " +
+        "and report back with the outcome.",
       parameters: MakePhoneCallParams,
       async execute(_toolCallId: string, params: MakePhoneCallParamsType) {
         const result = await initiateCall(params, logger);
