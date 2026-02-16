@@ -126,6 +126,18 @@ Or via CLI:
 openclaw voicecall-rt call -n +14155551234 -t "Reserve a table for 4 on Friday at 7pm"
 ```
 
+## CI/CD
+
+This repo includes a GitHub Actions workflow at `.github/workflows/ci-publish.yml` that:
+
+- Runs `bun run typecheck` on pull requests and pushes to `main`
+- Verifies version consistency across `package.json`, `openclaw.plugin.json`, and `SKILL.md`
+- Publishes to ClawHub on pushes to `main` if that version is not already published
+
+Required GitHub secret:
+
+- `CLAWHUB_TOKEN` — token used for `clawhub login --token ...` during publish
+
 ## Configuration Reference
 
 | Field | Type | Default | Description |
