@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeAndValidatePublicUrl } from "./public-url.ts";
 
 export const TwilioConfigSchema = z.object({
   accountSid: z.string().regex(/^AC[a-f0-9]{32}$/, "Invalid Twilio Account SID"),
@@ -43,7 +44,17 @@ export const PluginConfigSchema = z.object({
   fromNumber: z.string().regex(/^\+[1-9]\d{1,14}$/, "Phone number must be E.164 format"),
   openai: OpenAIConfigSchema,
   vad: VadConfigSchema.default({}),
-  publicUrl: z.string().url("Public URL must be a valid URL"),
+  publicUrl: z.string().url("Public URL must be a valid URL").transform((value, ctx) => {
+    try {
+      return normalizeAndValidatePublicUrl(value);
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return z.NEVER;
+    }
+  }),
   server: ServerConfigSchema.default({}),
   calls: CallsConfigSchema.default({}),
   inbound: InboundConfigSchema.default({}),

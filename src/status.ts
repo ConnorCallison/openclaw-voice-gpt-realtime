@@ -1,5 +1,6 @@
 import type { PluginConfig } from "./config.ts";
 import { TwilioClient } from "./twilio-client.ts";
+import { assertPublicUrlResolvesToPublicIp } from "./public-url.ts";
 
 export interface StatusCheck {
   name: string;
@@ -124,11 +125,9 @@ async function checkPublicUrl(config: PluginConfig): Promise<StatusCheck> {
   const webhookUrl = `${config.publicUrl}/voice/answer`;
 
   try {
-    const res = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: "CallSid=status-check&callId=status-check",
-    });
+    await assertPublicUrlResolvesToPublicIp(config.publicUrl);
+
+    const res = await fetch(webhookUrl, { method: "GET" });
 
     const body = await res.text();
     const hasTwiml = body.includes("<Response>") || body.includes("<Connect>");

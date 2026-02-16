@@ -12,10 +12,17 @@ import { CallManager } from "./src/call-manager.ts";
 import { TwilioClient } from "./src/twilio-client.ts";
 import { VoiceServer } from "./src/server.ts";
 import { checkStatus } from "./src/status.ts";
-import type { CallContext } from "./src/prompts.ts";
+import {
+  MAX_SYSTEM_PROMPT_LENGTH,
+  sanitizeSystemPrompt,
+  type CallContext,
+} from "./src/prompts.ts";
+import { assertPublicUrlResolvesToPublicIp } from "./src/public-url.ts";
 
 const MakePhoneCallParams = Type.Object({
-  to: Type.String({ description: "Phone number to call in E.164 format (e.g. +14155551234)" }),
+  to: Type.String({
+    description: "Phone number to call in E.164 format (e.g. +14155551234)",
+  }),
   task: Type.String({
     description:
       "Brief one-line summary of the call objective for logging (e.g. 'Dinner reservation at Tony's', " +
@@ -26,41 +33,32 @@ const MakePhoneCallParams = Type.Object({
       "Instructions for the AI voice agent that will speak on this phone call. " +
       "You are writing a prompt for a SEPARATE AI — it will read these instructions, then have a real " +
       "phone conversation with a human. The voice agent has no other context, so include everything it needs.\n\n" +
-
-      "IMPORTANT — write the prompt to produce CASUAL, HUMAN-SOUNDING conversation. " +
-      "The voice agent should sound like a normal person calling, NOT like a corporate AI. " +
-      "Think about how you'd actually talk on the phone — short sentences, filler words are okay, " +
-      "natural reactions. The prompt should encourage this tone.\n\n" +
-
+      "IMPORTANT — keep instructions truthful, concise, and useful. " +
       "What to include:\n" +
       "- Who they are and what they want (written in second person)\n" +
       "- All relevant details: names, dates, times, quantities, preferences, budget, etc.\n" +
       "- What to ask about or what info to gather\n" +
       "- Fallback preferences (e.g. 'if Friday doesn't work, try Saturday')\n" +
-      "- Any personal info to share if asked (name, phone number, email, etc.)\n" +
-      "- Tone guidance — remind it to be casual and human\n\n" +
-
+      "- Only the minimum personal info needed for this call\n" +
+      "- Tone guidance — natural and polite, but never deceptive\n\n" +
       "GOOD example:\n" +
       "\"You're calling Tony's Pizza to make a reservation. You want a table for 4 on Friday around 7pm, " +
       "name is Connor. If 7 doesn't work, anytime between 6 and 8 is fine. Ask if they have outdoor " +
-      "seating. Keep it chill — you're just a guy calling to book a table, not conducting a business meeting.\"\n\n" +
-
+      'seating. Keep responses short and friendly."\n\n' +
       "GOOD example:\n" +
       "\"You're calling to ask if they have the iPhone 16 Pro in stock, and if so what colors and how much. " +
       "If they don't have it, ask when they expect it back in stock. You don't need to buy it right now, " +
-      "just getting info. Be casual about it.\"\n\n" +
-
+      'just getting info."\n\n' +
       "GOOD example:\n" +
       "\"You're calling a barbershop to book a haircut for Saturday morning. You're flexible on the exact " +
       "time — anytime before noon works. Just a regular men's cut. If Saturday is booked, check Sunday. " +
-      "Name is Connor, phone number is 707-555-1234 if they need it.\"\n\n" +
-
+      'Name is Connor, phone number is 707-555-1234 if they need it."\n\n' +
       "BAD — too stiff/robotic:\n" +
-      "\"You are an AI assistant tasked with making a restaurant reservation. Please inquire about " +
-      "availability for a party of four on Friday evening. Request a time slot at 7:00 PM.\"\n\n" +
-
+      '"You are an AI assistant tasked with making a restaurant reservation. Please inquire about ' +
+      'availability for a party of four on Friday evening. Request a time slot at 7:00 PM."\n\n' +
       "BAD — too vague:\n" +
-      "\"Call the restaurant and make a reservation.\"",
+      '"Call the restaurant and make a reservation."',
+    maxLength: MAX_SYSTEM_PROMPT_LENGTH,
   }),
 });
 
@@ -68,9 +66,10 @@ type MakePhoneCallParamsType = Static<typeof MakePhoneCallParams>;
 
 const voiceRealtimeConfigSchema = {
   parse(value: unknown) {
-    const raw = value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
+    const raw =
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {};
     return parseConfig(raw);
   },
   uiHints: {
@@ -82,10 +81,16 @@ const voiceRealtimeConfigSchema = {
     "openai.voice": { label: "AI Voice" },
     "vad.type": { label: "VAD Type", advanced: true },
     "vad.eagerness": { label: "VAD Eagerness", advanced: true },
-    publicUrl: { label: "Public Webhook URL", placeholder: "https://your-domain.com" },
+    publicUrl: {
+      label: "Public Webhook URL",
+      placeholder: "https://your-domain.com",
+    },
     "server.port": { label: "Server Port", advanced: true },
     "server.bind": { label: "Server Bind Address", advanced: true },
-    "calls.maxDurationSeconds": { label: "Max Call Duration (sec)", advanced: true },
+    "calls.maxDurationSeconds": {
+      label: "Max Call Duration (sec)",
+      advanced: true,
+    },
     "calls.timeoutSeconds": { label: "Ring Timeout (sec)", advanced: true },
     "calls.enableAmd": { label: "Answering Machine Detection", advanced: true },
     "calls.maxConcurrent": { label: "Max Concurrent Calls", advanced: true },
@@ -119,15 +124,25 @@ const voiceRealtimePlugin = {
     server = new VoiceServer(config, callManager, twilioClient);
 
     // Resolve the agent's display name from OpenClaw config
-    const agents = api.config?.agents?.list as Array<{ id: string; identity?: { name?: string } }> | undefined;
+    const agents = api.config?.agents?.list as
+      | Array<{ id: string; identity?: { name?: string } }>
+      | undefined;
     const defaultAgent = agents?.find((a) => a.id === "main") || agents?.[0];
     agentName = defaultAgent?.identity?.name?.trim() || "";
     server.setAgentName(agentName);
 
-    const logger = api.logger as { info: (m: string) => void; warn: (m: string) => void; error: (m: string) => void };
+    const logger = api.logger as {
+      info: (m: string) => void;
+      warn: (m: string) => void;
+      error: (m: string) => void;
+    };
 
     callManager.setOnComplete((callId, record) => {
-      logger.info(`[voice-rt] Call ${callId} completed: ${record.outcome?.summary || record.status}`);
+      logger.info(
+        `[voice-rt] Call ${callId} completed: ${
+          record.outcome?.summary || record.status
+        }`
+      );
     });
 
     // Register the make_phone_call tool
@@ -136,17 +151,19 @@ const voiceRealtimePlugin = {
       label: "Make Phone Call",
       description:
         "Make an outbound phone call to a real phone number. A voice AI will dial the number and have " +
-        "a natural, human-sounding conversation to accomplish whatever you describe. It can handle any " +
+        "a natural conversation to accomplish whatever you describe. It can handle any " +
         "phone task: reservations, appointments, checking hours/prices/availability, asking questions, etc. " +
         "You MUST write a systemPrompt that tells the voice AI who it is, what it wants, and all the " +
-        "details it needs. Write the prompt like you're briefing a friend who's about to make the call " +
-        "for you — casual, specific, and complete. The voice AI will call, handle the conversation, " +
+        "details it needs. Keep prompts truthful and policy-compliant (no impersonation or deception). " +
+        "The voice AI will call, handle the conversation, " +
         "and report back with the outcome.",
       parameters: MakePhoneCallParams,
       async execute(_toolCallId: string, params: MakePhoneCallParamsType) {
         const result = await initiateCall(params, logger);
         return {
-          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
           details: result,
         };
       },
@@ -155,33 +172,58 @@ const voiceRealtimePlugin = {
     // Gateway method
     api.registerGatewayMethod(
       "voicecall-rt.call",
-      async ({ params, respond }: { params: Record<string, unknown>; respond: (ok: boolean, payload?: unknown) => void }) => {
+      async ({
+        params,
+        respond,
+      }: {
+        params: Record<string, unknown>;
+        respond: (ok: boolean, payload?: unknown) => void;
+      }) => {
         try {
           const result = await initiateCall(params as any, logger);
           respond(result.success, result);
         } catch (err) {
-          respond(false, { error: err instanceof Error ? err.message : String(err) });
+          respond(false, {
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       }
     );
 
     api.registerGatewayMethod(
       "voicecall-rt.status",
-      async ({ respond }: { respond: (ok: boolean, payload?: unknown) => void }) => {
+      async ({
+        respond,
+      }: {
+        respond: (ok: boolean, payload?: unknown) => void;
+      }) => {
         try {
           const result = await checkStatus(config, server.isListening());
           respond(true, result);
         } catch (err) {
-          respond(false, { error: err instanceof Error ? err.message : String(err) });
+          respond(false, {
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       }
     );
 
     api.registerGatewayMethod(
       "voicecall-rt.active",
-      async ({ respond }: { respond: (ok: boolean, payload?: unknown) => void }) => {
+      async ({
+        respond,
+      }: {
+        respond: (ok: boolean, payload?: unknown) => void;
+      }) => {
         const active = callManager.getActiveCalls();
-        respond(true, { calls: active.map((c) => ({ callId: c.callId, to: c.to, status: c.status, task: c.task })) });
+        respond(true, {
+          calls: active.map((c) => ({
+            callId: c.callId,
+            to: c.to,
+            status: c.status,
+            task: c.task,
+          })),
+        });
       }
     );
 
@@ -195,10 +237,19 @@ const voiceRealtimePlugin = {
         root
           .command("call")
           .description("Make an outbound phone call")
-          .requiredOption("-n, --number <phone>", "Phone number to call (E.164)")
-          .requiredOption("-t, --task <description>", "What to accomplish on the call")
+          .requiredOption(
+            "-n, --number <phone>",
+            "Phone number to call (E.164)"
+          )
+          .requiredOption(
+            "-t, --task <description>",
+            "What to accomplish on the call"
+          )
           .action(async (opts: { number: string; task: string }) => {
-            const result = await initiateCall({ to: opts.number, task: opts.task }, logger);
+            const result = await initiateCall(
+              { to: opts.number, task: opts.task },
+              logger
+            );
             console.log(JSON.stringify(result, null, 2));
           });
 
@@ -239,8 +290,11 @@ const voiceRealtimePlugin = {
     api.registerService({
       id: "voicecall-rt",
       async start() {
+        await assertPublicUrlResolvesToPublicIp(config.publicUrl);
         await server.start();
-        logger.info(`[voice-rt] Server started on ${config.server.bind}:${config.server.port}`);
+        logger.info(
+          `[voice-rt] Server started on ${config.server.bind}:${config.server.port}`
+        );
       },
       async stop() {
         await server.stop();
@@ -253,7 +307,12 @@ const voiceRealtimePlugin = {
 async function initiateCall(
   params: { to: string; task: string; systemPrompt?: string },
   logger: { info: (m: string) => void; error: (m: string) => void }
-): Promise<{ success: boolean; callId: string; message: string; error?: string }> {
+): Promise<{
+  success: boolean;
+  callId: string;
+  message: string;
+  error?: string;
+}> {
   const { to, task, systemPrompt } = params;
 
   // Enforce concurrent call limit
@@ -270,12 +329,19 @@ async function initiateCall(
   const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   logger.info(`[voice-rt] Initiating call ${callId} to ${to} — task: ${task}`);
 
-  const callContext: CallContext = { task, direction: "outbound", agentName, systemPrompt };
+  const callContext: CallContext = {
+    task,
+    direction: "outbound",
+    agentName,
+    systemPrompt: sanitizeSystemPrompt(systemPrompt),
+  };
 
   server.setCallContext(callId, callContext);
   callManager.createCall(callId, to, config.fromNumber, task);
 
   try {
+    await assertPublicUrlResolvesToPublicIp(config.publicUrl);
+
     const result = await twilioClient.initiateCall({
       to,
       callId,

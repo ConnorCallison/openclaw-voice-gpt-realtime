@@ -38,7 +38,7 @@ export class CallManager {
   private onComplete?: CallEventCallback;
 
   constructor() {
-    mkdirSync(DATA_DIR, { recursive: true });
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   }
 
   setOnComplete(cb: CallEventCallback): void {
@@ -171,6 +171,6 @@ export class CallManager {
       transcriptLength: record.transcript.length,
       error: record.error,
     });
-    appendFileSync(CALLS_FILE, line + "\n");
+    appendFileSync(CALLS_FILE, line + "\n", { mode: 0o600 });
   }
 }

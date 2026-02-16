@@ -33,7 +33,7 @@ User (via iMessage/CLI) --> OpenClaw Agent --> make_phone_call tool
 - **~200-300ms response latency** — Single model inference, zero transcoding
 - **Natural voice** — OpenAI's `coral` voice (configurable: alloy, ash, ballad, coral, echo, sage, shimmer, verse)
 - **"Listen first" outbound behavior** — AI waits for the callee to answer before speaking
-- **Agent-driven prompts** — The OpenClaw agent writes a custom system prompt for each call
+- **Agent-driven prompts with safety wrapper** — Custom prompts are sanitized/truncated and wrapped with non-overridable safety rules
 - **IVR navigation** — DTMF tone generation for navigating phone menus
 - **Voicemail detection** — Leaves a brief message and hangs up
 - **Inbound calls** — Optionally receive calls with configurable allowlist policy
@@ -88,6 +88,8 @@ Add to your `openclaw.json`:
 }
 ```
 
+`publicUrl` must be an HTTPS origin only (no path/query), and cannot be localhost/private/internal.
+
 ### 3. Set Up Tunnel
 
 The plugin needs a public URL so Twilio can reach its webhook server. Any tunneling solution works:
@@ -136,7 +138,7 @@ openclaw voicecall-rt call -n +14155551234 -t "Reserve a table for 4 on Friday a
 | `openai.voice` | string | `coral` | AI voice |
 | `vad.type` | string | `semantic_vad` | VAD type |
 | `vad.eagerness` | string | `medium` | VAD eagerness |
-| `publicUrl` | string | required | Public URL for webhooks |
+| `publicUrl` | string | required | Public HTTPS origin for webhooks (no path/query, not localhost/private/internal) |
 | `server.port` | number | `3335` | Server port |
 | `server.bind` | string | `127.0.0.1` | Bind address |
 | `calls.maxDurationSeconds` | number | `600` | Max call duration |
@@ -191,16 +193,19 @@ Per-call pricing (approximate):
 
 ## Security
 
-- **Webhook signature validation** — All Twilio webhook requests are verified using the `X-Twilio-Signature` header
+- **Strict webhook authentication** — Signed `X-Twilio-Signature` is required for all Twilio POST webhook routes
 - **WebSocket authentication** — Per-call secret tokens prevent unauthorized connections
 - **Credentials are never logged or exposed** — API keys and auth tokens are marked sensitive and excluded from all output
 - **Twilio Account SIDs are masked** in status output (first 4 + last 4 characters only)
 - **Input validation** — All config validated with Zod schemas. Phone numbers must match E.164 format. DTMF restricted to valid digits
+- **SSRF guardrails on `publicUrl`** — Only HTTPS public origins are accepted; localhost/private/internal hosts are rejected
 - **Server binds to localhost by default** (`127.0.0.1`) — not exposed to the network unless explicitly configured
 - **Inbound calls disabled by default** — Requires explicit opt-in with configurable allowlist policy
 - **Concurrent call limit** — Prevents runaway costs (default 5 concurrent calls, configurable)
 - **Call duration limits** — Default 10-minute max per call
-- **Anti-prompt-injection** — System prompts include guardrails against voice-based prompt injection
+- **Prompt injection hardening** — User/agent prompts are bounded and wrapped with non-overridable call safety rules
+- **Identity transparency** — The model is instructed to answer truthfully if asked whether it is an AI
+- **Private local artifacts** — Call logs/debug recordings are created with restrictive file permissions
 
 ## Requirements
 

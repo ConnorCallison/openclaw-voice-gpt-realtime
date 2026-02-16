@@ -3,7 +3,7 @@
   "name": "openclaw-voice-gpt-realtime",
   "displayName": "Voice Calls (OpenAI Realtime)",
   "description": "Ultra-low-latency AI phone calls powered by OpenAI's Realtime API. Single-model speech-to-speech with ~200-300ms latency.",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "author": "Connor Callison",
   "license": "MIT",
   "homepage": "https://github.com/connorcallison/openclaw-voice-gpt-realtime",
@@ -80,7 +80,8 @@
       "publicUrl": {
         "type": "string",
         "title": "Public URL",
-        "description": "Public-facing URL for Twilio webhooks (e.g. https://your-domain.com)"
+        "description": "Public-facing HTTPS origin for Twilio webhooks (e.g. https://your-domain.com). Must not be localhost/private/internal.",
+        "pattern": "^https://[^/?#]+$"
       },
       "server": {
         "type": "object",
@@ -153,7 +154,7 @@
           },
           "systemPrompt": {
             "type": "string",
-            "description": "Custom system prompt for inbound calls (overrides default)"
+            "description": "Custom system prompt for inbound calls (overrides default). Keep it truthful and non-deceptive."
           }
         }
       },
@@ -169,7 +170,7 @@
   "tools": [
     {
       "name": "make_phone_call",
-      "description": "Make an outbound phone call to a business on behalf of the user. Uses AI to have a natural phone conversation for reservations, appointments, inquiries, etc."
+      "description": "Make an outbound phone call to a business on behalf of the user. Uses AI to have a natural, policy-compliant phone conversation for reservations, appointments, inquiries, etc."
     }
   ],
   "services": [

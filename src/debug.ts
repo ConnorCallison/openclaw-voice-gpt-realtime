@@ -1,4 +1,4 @@
-import { mkdirSync, appendFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -27,7 +27,7 @@ export class DebugRecorder {
     this.startTime = Date.now();
 
     if (enabled) {
-      mkdirSync(RECORDINGS_DIR, { recursive: true });
+      mkdirSync(RECORDINGS_DIR, { recursive: true, mode: 0o700 });
     }
   }
 
@@ -82,13 +82,13 @@ export class DebugRecorder {
     // Save raw mu-law audio
     if (this.inboundChunks.length > 0) {
       const inboundPath = `${basePath}-inbound.raw`;
-      writeFileSync(inboundPath, Buffer.concat(this.inboundChunks));
+      writeFileSync(inboundPath, Buffer.concat(this.inboundChunks), { mode: 0o600 });
       console.log(`${GREEN}[debug]${RESET} Saved inbound audio: ${inboundPath}`);
     }
 
     if (this.outboundChunks.length > 0) {
       const outboundPath = `${basePath}-outbound.raw`;
-      writeFileSync(outboundPath, Buffer.concat(this.outboundChunks));
+      writeFileSync(outboundPath, Buffer.concat(this.outboundChunks), { mode: 0o600 });
       console.log(`${GREEN}[debug]${RESET} Saved outbound audio: ${outboundPath}`);
     }
 
@@ -100,7 +100,7 @@ export class DebugRecorder {
         const raw = await Bun.file(rawPath).arrayBuffer();
         if (raw.byteLength > 0) {
           const wav = createMulawWav(new Uint8Array(raw));
-          writeFileSync(wavPath, wav);
+          writeFileSync(wavPath, wav, { mode: 0o600 });
           console.log(`${GREEN}[debug]${RESET} Converted to WAV: ${wavPath}`);
         }
       } catch {
@@ -110,7 +110,9 @@ export class DebugRecorder {
 
     // Save transcript
     const transcriptPath = `${basePath}-transcript.json`;
-    writeFileSync(transcriptPath, JSON.stringify({ callId: this.callId, transcript, events: this.events }, null, 2));
+    writeFileSync(transcriptPath, JSON.stringify({ callId: this.callId, transcript, events: this.events }, null, 2), {
+      mode: 0o600,
+    });
     console.log(`${GREEN}[debug]${RESET} Saved transcript: ${transcriptPath}`);
   }
 

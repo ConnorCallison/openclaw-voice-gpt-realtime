@@ -1,6 +1,6 @@
 {
   "name": "openclaw-voice-gpt-realtime",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Ultra-low-latency AI phone calls powered by OpenAI's Realtime API for OpenClaw",
   "module": "index.ts",
   "main": "index.ts",

@@ -134,10 +134,15 @@ export class VoiceServer {
       req.on("end", () => {
         if (bodySize > MAX_BODY_SIZE) return; // already rejected
 
-        // Validate Twilio webhook signature
-        const twilioSignature = req.headers["x-twilio-signature"] as string | undefined;
-        if (twilioSignature) {
-          const fullUrl = `${this.config.publicUrl}${url.pathname}${url.search}`;
+        if (this.requiresTwilioSignature(url.pathname)) {
+          const twilioSignature = req.headers["x-twilio-signature"] as string | undefined;
+          if (!twilioSignature) {
+            res.writeHead(403);
+            res.end("Missing Twilio signature");
+            return;
+          }
+
+          const fullUrl = new URL(`${url.pathname}${url.search}`, this.config.publicUrl).toString();
           const bodyParams: Record<string, string> = {};
           const parsed = new URLSearchParams(body);
           for (const [k, v] of parsed) bodyParams[k] = v;
@@ -183,6 +188,10 @@ export class VoiceServer {
         res.writeHead(404);
         res.end("Not found");
     }
+  }
+
+  private requiresTwilioSignature(path: string): boolean {
+    return path === "/voice/answer" || path === "/voice/status" || path === "/voice/amd";
   }
 
   private async routeGet(path: string, res: import("node:http").ServerResponse): Promise<void> {
