@@ -7,11 +7,12 @@
  */
 
 import { Type, type Static } from "@sinclair/typebox";
+import { spawn } from "node:child_process";
 import { parseConfig, type PluginConfig } from "./src/config.ts";
 import { CallManager } from "./src/call-manager.ts";
-import { TwilioClient } from "./src/twilio-client.ts";
+import { TwilioClient, type TwilioCallDetails, type TwilioCallEvent } from "./src/twilio-client.ts";
 import { VoiceServer } from "./src/server.ts";
-import { checkStatus } from "./src/status.ts";
+import { checkStatus, type StatusResult } from "./src/status.ts";
 import {
   MAX_SYSTEM_PROMPT_LENGTH,
   sanitizeSystemPrompt,
@@ -108,6 +109,31 @@ let callManager: CallManager;
 let twilioClient: TwilioClient;
 let server: VoiceServer;
 let agentName: string;
+
+interface InitiateCallResult {
+  success: boolean;
+  callId: string;
+  message: string;
+  error?: string;
+}
+
+interface ActiveCallsResult {
+  calls: Array<{
+    callId: string;
+    to: string;
+    status: string;
+    task: string;
+  }>;
+}
+
+interface InspectCallResult {
+  success: boolean;
+  callSid: string;
+  message: string;
+  details?: TwilioCallDetails;
+  events?: TwilioCallEvent[];
+  error?: string;
+}
 
 const voiceRealtimePlugin = {
   id: "openclaw-voice-gpt-realtime",
@@ -227,6 +253,21 @@ const voiceRealtimePlugin = {
       }
     );
 
+    api.registerGatewayMethod(
+      "voicecall-rt.inspect",
+      async ({
+        params,
+        respond,
+      }: {
+        params: Record<string, unknown>;
+        respond: (ok: boolean, payload?: unknown) => void;
+      }) => {
+        const callSid = typeof params.callSid === "string" ? params.callSid : "";
+        const result = await inspectCall({ callSid }, logger);
+        respond(result.success, result);
+      }
+    );
+
     // CLI
     api.registerCli(
       ({ program }: { program: any }) => {
@@ -246,26 +287,44 @@ const voiceRealtimePlugin = {
             "What to accomplish on the call"
           )
           .action(async (opts: { number: string; task: string }) => {
-            const result = await initiateCall(
-              { to: opts.number, task: opts.task },
-              logger
-            );
-            console.log(JSON.stringify(result, null, 2));
+            try {
+              const result = await callGatewayMethodFromCli<InitiateCallResult>(
+                "voicecall-rt.call",
+                { to: opts.number, task: opts.task },
+                45_000
+              );
+              console.log(JSON.stringify(result, null, 2));
+              if (!result.success) process.exitCode = 1;
+            } catch (err) {
+              process.exitCode = 1;
+              console.error(
+                `[voice-rt] Failed to initiate call via gateway: ${err instanceof Error ? err.message : String(err)}`
+              );
+              console.error("[voice-rt] Ensure the gateway is running and reachable (`openclaw gateway --force`).");
+            }
           });
 
         root
           .command("status")
           .description("Check setup status")
           .action(async () => {
-            const result = await checkStatus(config, server.isListening());
-            console.log(JSON.stringify(result, null, 2));
-            if (result.ready) {
-              console.log("\n✓ All checks passed. Ready to make calls.");
-            } else {
-              console.log("\n✗ Issues found:");
-              for (const issue of result.issues) {
-                console.log(`  - ${issue}`);
+            try {
+              const result = await callGatewayMethodFromCli<StatusResult>("voicecall-rt.status", {}, 20_000);
+              console.log(JSON.stringify(result, null, 2));
+              if (result.ready) {
+                console.log("\n✓ All checks passed. Ready to make calls.");
+              } else {
+                console.log("\n✗ Issues found:");
+                for (const issue of result.issues) {
+                  console.log(`  - ${issue}`);
+                }
               }
+            } catch (err) {
+              process.exitCode = 1;
+              console.error(
+                `[voice-rt] Failed to fetch status via gateway: ${err instanceof Error ? err.message : String(err)}`
+              );
+              console.error("[voice-rt] Ensure the gateway is running and reachable (`openclaw gateway --force`).");
             }
           });
 
@@ -273,13 +332,43 @@ const voiceRealtimePlugin = {
           .command("active")
           .description("List active calls")
           .action(async () => {
-            const active = callManager.getActiveCalls();
-            if (active.length === 0) {
-              console.log("No active calls.");
-            } else {
-              for (const call of active) {
-                console.log(`  ${call.callId}: ${call.to} (${call.status})`);
+            try {
+              const result = await callGatewayMethodFromCli<ActiveCallsResult>("voicecall-rt.active", {}, 20_000);
+              if (result.calls.length === 0) {
+                console.log("No active calls.");
+              } else {
+                for (const call of result.calls) {
+                  console.log(`  ${call.callId}: ${call.to} (${call.status})`);
+                }
               }
+            } catch (err) {
+              process.exitCode = 1;
+              console.error(
+                `[voice-rt] Failed to fetch active calls via gateway: ${err instanceof Error ? err.message : String(err)}`
+              );
+              console.error("[voice-rt] Ensure the gateway is running and reachable (`openclaw gateway --force`).");
+            }
+          });
+
+        root
+          .command("inspect")
+          .description("Inspect a Twilio call by SID")
+          .requiredOption("-s, --sid <callSid>", "Twilio Call SID (CA...)")
+          .action(async (opts: { sid: string }) => {
+            try {
+              const result = await callGatewayMethodFromCli<InspectCallResult>(
+                "voicecall-rt.inspect",
+                { callSid: opts.sid },
+                20_000
+              );
+              console.log(JSON.stringify(result, null, 2));
+              if (!result.success) process.exitCode = 1;
+            } catch (err) {
+              process.exitCode = 1;
+              console.error(
+                `[voice-rt] Failed to inspect call via gateway: ${err instanceof Error ? err.message : String(err)}`
+              );
+              console.error("[voice-rt] Ensure the gateway is running and reachable (`openclaw gateway --force`).");
             }
           });
       },
@@ -328,6 +417,9 @@ async function initiateCall(
 
   const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   logger.info(`[voice-rt] Initiating call ${callId} to ${to} — task: ${task}`);
+  logger.info(
+    `[voice-rt] Call settings: timeout=${config.calls.timeoutSeconds}s maxDuration=${config.calls.maxDurationSeconds}s amd=${config.calls.enableAmd}`
+  );
 
   const callContext: CallContext = {
     task,
@@ -375,4 +467,150 @@ async function initiateCall(
   }
 }
 
+async function inspectCall(
+  params: { callSid: string },
+  logger: { info: (m: string) => void; error: (m: string) => void }
+): Promise<{
+  success: boolean;
+  callSid: string;
+  message: string;
+  details?: TwilioCallDetails;
+  events?: TwilioCallEvent[];
+  error?: string;
+}> {
+  const callSid = (params.callSid || "").trim();
+
+  if (!/^CA[a-zA-Z0-9]{32}$/.test(callSid)) {
+    return {
+      success: false,
+      callSid,
+      message: "Invalid Call SID",
+      error: "Call SID must match format CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    };
+  }
+
+  try {
+    const details = await twilioClient.getCallDetails(callSid);
+    const events = await twilioClient.getCallEvents(callSid);
+    logger.info(`[voice-rt] Inspected call ${callSid}: status=${details.status} answeredBy=${details.answeredBy || "n/a"}`);
+    return {
+      success: true,
+      callSid,
+      message: `Fetched call details for ${callSid}`,
+      details,
+      events,
+    };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    logger.error(`[voice-rt] Failed to inspect call ${callSid}: ${errorMsg}`);
+    return {
+      success: false,
+      callSid,
+      message: `Failed to fetch call details for ${callSid}`,
+      error: errorMsg,
+    };
+  }
+}
+
 export default voiceRealtimePlugin;
+
+async function callGatewayMethodFromCli<T>(
+  method: string,
+  params: Record<string, unknown>,
+  timeoutMs = 20_000
+): Promise<T> {
+  const cliEntrypoint = process.argv[1];
+  if (!cliEntrypoint) {
+    throw new Error("Unable to resolve OpenClaw CLI entrypoint for gateway call");
+  }
+
+  const args = [
+    cliEntrypoint,
+    "gateway",
+    "call",
+    method,
+    "--json",
+    "--timeout",
+    String(timeoutMs),
+    "--params",
+    JSON.stringify(params),
+  ];
+
+  const { stdout, stderr, exitCode } = await runOpenclawCli(args, timeoutMs + 2_000);
+  const parsed = parseJsonObject(stdout) ?? parseJsonObject(`${stdout}\n${stderr}`);
+
+  if (exitCode !== 0) {
+    const errOut = stderr.trim() || stdout.trim() || `exit code ${exitCode}`;
+    throw new Error(`gateway call ${method} failed: ${errOut}`);
+  }
+
+  if (!parsed) {
+    throw new Error(`gateway call ${method} returned non-JSON output`);
+  }
+
+  return parsed as T;
+}
+
+function runOpenclawCli(
+  args: string[],
+  timeoutMs: number
+): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, args, {
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+    }, timeoutMs);
+
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+
+    child.on("close", (exitCode) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        reject(new Error(`openclaw CLI timed out after ${timeoutMs}ms`));
+        return;
+      }
+      resolve({ stdout, stderr, exitCode });
+    });
+  });
+}
+
+function parseJsonObject(text: string): unknown | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // fall through
+  }
+
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace < 0 || lastBrace <= firstBrace) return null;
+
+  try {
+    return JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+  } catch {
+    return null;
+  }
+}

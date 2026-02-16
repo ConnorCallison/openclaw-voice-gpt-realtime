@@ -126,6 +126,18 @@ Or via CLI:
 openclaw voicecall-rt call -n +14155551234 -t "Reserve a table for 4 on Friday at 7pm"
 ```
 
+Note: CLI subcommands proxy through the running OpenClaw gateway so webhook/token state stays consistent. If needed, start it with:
+
+```bash
+openclaw gateway --force
+```
+
+Inspect a past call by Twilio SID (useful for diagnosing machine/voicemail answers):
+
+```bash
+openclaw voicecall-rt inspect --sid CAXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+```
+
 ## CI/CD
 
 This repo includes a GitHub Actions workflow at `.github/workflows/ci-publish.yml` that:

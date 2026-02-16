@@ -15,6 +15,33 @@ export interface TwilioCallResult {
   status: string;
 }
 
+export interface TwilioCallDetails {
+  sid: string;
+  status: string;
+  direction?: string;
+  from?: string;
+  to?: string;
+  startTime?: string | null;
+  endTime?: string | null;
+  dateCreated?: string | null;
+  dateUpdated?: string | null;
+  duration?: string | null;
+  answeredBy?: string | null;
+  price?: string | null;
+  priceUnit?: string | null;
+}
+
+export interface TwilioCallEvent {
+  requestMethod?: string;
+  requestUrl?: string;
+  callStatus?: string | null;
+  answeredBy?: string | null;
+  timestamp?: string | null;
+  sequenceNumber?: string | null;
+  responseCode?: number | null;
+  requestDurationMs?: number | null;
+}
+
 export class TwilioClient {
   private client: twilio.Twilio;
   private config: PluginConfig;
@@ -40,11 +67,9 @@ export class TwilioClient {
     };
 
     if (opts.enableAmd) {
-      const amdUrl = `${opts.publicUrl}/voice/amd?callId=${encodeURIComponent(opts.callId)}`;
-      callParams.machineDetection = "DetectMessageEnd";
-      callParams.asyncAmd = "true";
-      callParams.asyncAmdStatusCallback = amdUrl;
-      callParams.asyncAmdStatusCallbackMethod = "POST";
+      // Use synchronous AMD so /voice/answer receives AnsweredBy before we bridge audio.
+      callParams.machineDetection = "Enable";
+      callParams.machineDetectionTimeout = 8;
     }
 
     const call = await this.client.calls.create(callParams as unknown as Parameters<typeof this.client.calls.create>[0]);
@@ -57,6 +82,46 @@ export class TwilioClient {
 
   async hangup(callSid: string): Promise<void> {
     await this.client.calls(callSid).update({ status: "completed" });
+  }
+
+  async getCallDetails(callSid: string): Promise<TwilioCallDetails> {
+    const call = await this.client.calls(callSid).fetch();
+    const raw = call as unknown as Record<string, unknown>;
+
+    return {
+      sid: call.sid,
+      status: call.status,
+      direction: call.direction,
+      from: call.from || undefined,
+      to: call.to || undefined,
+      startTime: call.startTime?.toISOString() ?? null,
+      endTime: call.endTime?.toISOString() ?? null,
+      dateCreated: call.dateCreated?.toISOString() ?? null,
+      dateUpdated: call.dateUpdated?.toISOString() ?? null,
+      duration: call.duration,
+      answeredBy: (raw.answeredBy as string | undefined) ?? null,
+      price: call.price ?? null,
+      priceUnit: call.priceUnit ?? null,
+    };
+  }
+
+  async getCallEvents(callSid: string, limit = 30): Promise<TwilioCallEvent[]> {
+    const events = await this.client.calls(callSid).events.list({ limit });
+
+    return events.map((event) => {
+      const params = (event.request?.parameters || {}) as Record<string, string | undefined>;
+
+      return {
+        requestMethod: event.request?.method,
+        requestUrl: event.request?.url,
+        callStatus: params.call_status ?? null,
+        answeredBy: params.answered_by ?? null,
+        timestamp: params.timestamp ?? null,
+        sequenceNumber: params.sequence_number ?? null,
+        responseCode: event.response?.response_code ?? null,
+        requestDurationMs: event.response?.request_duration ?? null,
+      };
+    });
   }
 
   async verifyAccount(): Promise<{
