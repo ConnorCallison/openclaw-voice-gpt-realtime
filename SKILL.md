@@ -7,13 +7,8 @@ metadata:
   openclaw:
     emoji: "\U0001F4DE"
     requires:
-      env:
-        - TWILIO_ACCOUNT_SID
-        - TWILIO_AUTH_TOKEN
-        - OPENAI_API_KEY
       bins:
         - bun
-    primaryEnv: OPENAI_API_KEY
     install:
       - kind: node
         package: openclaw-voice-gpt-realtime
