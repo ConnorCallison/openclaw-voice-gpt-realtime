@@ -31,11 +31,14 @@ User (via iMessage/CLI) --> OpenClaw Agent --> make_phone_call tool
 ## Features
 
 - **~200-300ms response latency** — Single model inference, zero transcoding
-- **Natural voice** — OpenAI's `coral` voice (configurable)
+- **Natural voice** — OpenAI's `coral` voice (configurable: alloy, ash, ballad, coral, echo, sage, shimmer, verse)
 - **"Listen first" outbound behavior** — AI waits for the callee to answer before speaking
+- **Agent-driven prompts** — The OpenClaw agent writes a custom system prompt for each call
 - **IVR navigation** — DTMF tone generation for navigating phone menus
 - **Voicemail detection** — Leaves a brief message and hangs up
-- **Intent-based prompts** — Tailored conversation strategies per call type
+- **Inbound calls** — Optionally receive calls with configurable allowlist policy
+- **Barge-in** — Caller can interrupt the AI mid-sentence
+- **Structured outcomes** — Calls report success/failure with details (confirmation numbers, prices, etc.)
 - **Call transcripts** — Full transcript logging with timestamps
 - **Debug mode** — Call recording, verbose WebSocket logging, latency metrics
 - **Status checker** — Built-in verification of Twilio, OpenAI, tunnel, and server
@@ -45,12 +48,15 @@ User (via iMessage/CLI) --> OpenClaw Agent --> make_phone_call tool
 ### 1. Install
 
 ```bash
-# Clone the repo
+npx clawhub@latest install openclaw-voice-gpt-realtime
+```
+
+Or install from source for development:
+
+```bash
 git clone https://github.com/connorcallison/openclaw-voice-gpt-realtime.git
 cd openclaw-voice-gpt-realtime
 bun install
-
-# Install as OpenClaw plugin (local symlink)
 openclaw plugins install -l .
 ```
 
@@ -69,18 +75,12 @@ Add to your `openclaw.json`:
             "accountSid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
             "authToken": "your-auth-token"
           },
-          "fromNumber": "+17077024785",
+          "fromNumber": "+17075551234",
           "openai": {
             "apiKey": "sk-proj-...",
-            "model": "gpt-realtime",
             "voice": "coral"
           },
-          "publicUrl": "https://your-domain.com",
-          "server": {
-            "port": 3335,
-            "bind": "127.0.0.1"
-          },
-          "debug": false
+          "publicUrl": "https://your-domain.com"
         }
       }
     }
@@ -90,7 +90,7 @@ Add to your `openclaw.json`:
 
 ### 3. Set Up Tunnel
 
-Route `/voice/*` to port 3335 via your reverse proxy (Cloudflare Tunnel, ngrok, etc.):
+The plugin needs a public URL so Twilio can reach its webhook server. Any tunneling solution works:
 
 ```yaml
 # Cloudflare Tunnel example
@@ -114,27 +114,15 @@ openclaw voicecall-rt status
 
 ### 5. Make a Call
 
-Via the OpenClaw agent (iMessage, CLI, etc.):
+Tell your agent naturally:
 
 > "Call Tony's Pizza at +14155551234 and make a reservation for 4 people this Friday at 7pm"
 
 Or via CLI:
 
 ```bash
-openclaw voicecall-rt call +14155551234 \
-  --intent restaurant_reservation \
-  --context '{"businessName":"Tony'\''s Pizza","partySize":4,"date":"Friday","time":"7:00 PM"}'
+openclaw voicecall-rt call -n +14155551234 -t "Reserve a table for 4 on Friday at 7pm"
 ```
-
-## Call Intents
-
-| Intent | Description | Context Fields |
-|--------|-------------|----------------|
-| `restaurant_reservation` | Make a restaurant reservation | `partySize`, `date`, `time`, `specialRequests` |
-| `appointment_booking` | Book an appointment | `serviceType`, `preferredTimes` |
-| `price_inquiry` | Ask about pricing | `inquirySubject` |
-| `general_inquiry` | General question | Any relevant details |
-| `custom` | Custom prompt | `customPrompt` (overrides default) |
 
 ## Configuration Reference
 
@@ -154,11 +142,25 @@ openclaw voicecall-rt call +14155551234 \
 | `calls.maxDurationSeconds` | number | `600` | Max call duration |
 | `calls.timeoutSeconds` | number | `30` | Ring timeout |
 | `calls.enableAmd` | boolean | `true` | Answering machine detection |
+| `calls.maxConcurrent` | number | `5` | Max concurrent active calls |
+| `inbound.enabled` | boolean | `false` | Accept inbound calls |
+| `inbound.policy` | string | `disabled` | disabled / open / allowlist |
+| `inbound.allowFrom` | string[] | `[]` | Allowed caller numbers (E.164) |
+| `inbound.greeting` | string | `"Hey! What's up?"` | What the AI says when answering |
+| `inbound.systemPrompt` | string | — | Custom prompt for inbound calls |
 | `debug` | boolean | `false` | Debug mode |
+
+## Inbound Calls
+
+Enable receiving calls by setting `inbound.enabled: true` and choosing a policy:
+
+- **`disabled`** — No inbound calls (default)
+- **`open`** — Accept calls from any number
+- **`allowlist`** — Only accept calls from numbers in `inbound.allowFrom`
 
 ## Debug Mode
 
-Enable with `"debug": true` in config or `--debug` on CLI. This activates:
+Enable with `"debug": true` in config. This activates:
 
 - **Call recording** — Raw mu-law + WAV files saved to `~/.openclaw/voice-calls-realtime/recordings/`
 - **Verbose logging** — Every WebSocket event with timestamps and color coding
@@ -186,6 +188,19 @@ Per-call pricing (approximate):
 | OpenAI Realtime (audio output) | ~$0.24/min | gpt-realtime |
 | Twilio voice | ~$0.014/min | Outbound US |
 | **Total** | **~$0.31/min** | ~$1.55 for a 5-minute call |
+
+## Security
+
+- **Webhook signature validation** — All Twilio webhook requests are verified using the `X-Twilio-Signature` header
+- **WebSocket authentication** — Per-call secret tokens prevent unauthorized connections
+- **Credentials are never logged or exposed** — API keys and auth tokens are marked sensitive and excluded from all output
+- **Twilio Account SIDs are masked** in status output (first 4 + last 4 characters only)
+- **Input validation** — All config validated with Zod schemas. Phone numbers must match E.164 format. DTMF restricted to valid digits
+- **Server binds to localhost by default** (`127.0.0.1`) — not exposed to the network unless explicitly configured
+- **Inbound calls disabled by default** — Requires explicit opt-in with configurable allowlist policy
+- **Concurrent call limit** — Prevents runaway costs (default 5 concurrent calls, configurable)
+- **Call duration limits** — Default 10-minute max per call
+- **Anti-prompt-injection** — System prompts include guardrails against voice-based prompt injection
 
 ## Requirements
 

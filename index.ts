@@ -88,6 +88,7 @@ const voiceRealtimeConfigSchema = {
     "calls.maxDurationSeconds": { label: "Max Call Duration (sec)", advanced: true },
     "calls.timeoutSeconds": { label: "Ring Timeout (sec)", advanced: true },
     "calls.enableAmd": { label: "Answering Machine Detection", advanced: true },
+    "calls.maxConcurrent": { label: "Max Concurrent Calls", advanced: true },
     "inbound.enabled": { label: "Enable Inbound Calls" },
     "inbound.policy": { label: "Inbound Policy" },
     "inbound.allowFrom": { label: "Allowed Callers (E.164)", advanced: true },
@@ -254,6 +255,17 @@ async function initiateCall(
   logger: { info: (m: string) => void; error: (m: string) => void }
 ): Promise<{ success: boolean; callId: string; message: string; error?: string }> {
   const { to, task, systemPrompt } = params;
+
+  // Enforce concurrent call limit
+  const activeCalls = callManager.getActiveCalls();
+  if (activeCalls.length >= config.calls.maxConcurrent) {
+    return {
+      success: false,
+      callId: "",
+      message: `Cannot initiate call: ${activeCalls.length} concurrent calls already active (max ${config.calls.maxConcurrent})`,
+      error: "MAX_CONCURRENT_CALLS",
+    };
+  }
 
   const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   logger.info(`[voice-rt] Initiating call ${callId} to ${to} — task: ${task}`);

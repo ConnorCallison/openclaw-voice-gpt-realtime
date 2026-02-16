@@ -27,6 +27,7 @@ export const CallsConfigSchema = z.object({
   maxDurationSeconds: z.number().int().min(60).default(600),
   timeoutSeconds: z.number().int().min(10).default(30),
   enableAmd: z.boolean().default(true),
+  maxConcurrent: z.number().int().min(1).max(50).default(5),
 });
 
 export const InboundConfigSchema = z.object({

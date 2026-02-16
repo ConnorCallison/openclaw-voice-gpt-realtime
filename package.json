@@ -9,10 +9,12 @@
     "openclaw",
     "voice",
     "phone",
+    "call",
     "realtime",
     "openai",
     "twilio",
-    "ai-calling"
+    "ai-calling",
+    "speech-to-speech"
   ],
   "author": "Connor Callison",
   "license": "MIT",

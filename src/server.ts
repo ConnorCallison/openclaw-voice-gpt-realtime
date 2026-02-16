@@ -1,12 +1,16 @@
 import { type Server } from "node:http";
 import { createServer } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
+import { validateRequest } from "twilio/lib/webhooks/webhooks.js";
+import { randomBytes } from "node:crypto";
 import type { PluginConfig } from "./config.ts";
 import type { CallManager } from "./call-manager.ts";
 import type { TwilioClient } from "./twilio-client.ts";
 import { RealtimeBridge } from "./realtime-bridge.ts";
 import { checkStatus } from "./status.ts";
 import type { CallContext } from "./prompts.ts";
+
+const MAX_BODY_SIZE = 64 * 1024; // 64KB — Twilio payloads are typically <10KB
 
 export class VoiceServer {
   private config: PluginConfig;
@@ -19,6 +23,8 @@ export class VoiceServer {
   private agentName = "";
   // Pending call contexts awaiting Twilio stream connection
   private pendingCallContexts = new Map<string, CallContext>();
+  // Per-call secret tokens for WebSocket authentication
+  private callTokens = new Map<string, string>();
 
   constructor(config: PluginConfig, callManager: CallManager, twilioClient: TwilioClient) {
     this.config = config;
@@ -42,6 +48,17 @@ export class VoiceServer {
         const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
         if (url.pathname === "/voice/realtime-stream") {
+          // Validate per-call token
+          const callId = url.searchParams.get("callId") || "";
+          const token = url.searchParams.get("token") || "";
+          const expectedToken = this.callTokens.get(callId);
+
+          if (!expectedToken || token !== expectedToken) {
+            socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+            socket.destroy();
+            return;
+          }
+
           this.wss!.handleUpgrade(req, socket, head, (ws) => {
             this.handleWebSocket(ws, url);
           });
@@ -88,6 +105,13 @@ export class VoiceServer {
 
   setCallContext(callId: string, context: CallContext): void {
     this.pendingCallContexts.set(callId, context);
+    // Generate a per-call secret token for WebSocket authentication
+    const token = randomBytes(32).toString("hex");
+    this.callTokens.set(callId, token);
+  }
+
+  getCallToken(callId: string): string | undefined {
+    return this.callTokens.get(callId);
   }
 
   private handleHttp(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): void {
@@ -96,8 +120,35 @@ export class VoiceServer {
     // Parse body for POST requests
     if (req.method === "POST") {
       let body = "";
-      req.on("data", (chunk) => (body += chunk));
+      let bodySize = 0;
+      req.on("data", (chunk: Buffer | string) => {
+        bodySize += typeof chunk === "string" ? chunk.length : chunk.byteLength;
+        if (bodySize > MAX_BODY_SIZE) {
+          res.writeHead(413);
+          res.end("Payload too large");
+          req.destroy();
+          return;
+        }
+        body += chunk;
+      });
       req.on("end", () => {
+        if (bodySize > MAX_BODY_SIZE) return; // already rejected
+
+        // Validate Twilio webhook signature
+        const twilioSignature = req.headers["x-twilio-signature"] as string | undefined;
+        if (twilioSignature) {
+          const fullUrl = `${this.config.publicUrl}${url.pathname}${url.search}`;
+          const bodyParams: Record<string, string> = {};
+          const parsed = new URLSearchParams(body);
+          for (const [k, v] of parsed) bodyParams[k] = v;
+
+          if (!validateRequest(this.config.twilio.authToken, twilioSignature, fullUrl, bodyParams)) {
+            res.writeHead(403);
+            res.end("Invalid Twilio signature");
+            return;
+          }
+        }
+
         const params = new URLSearchParams(body);
         const queryParams = url.searchParams;
         // Merge query and body params
@@ -165,9 +216,15 @@ export class VoiceServer {
     if (!queryCallId && direction === "inbound") {
       // Inbound call — check policy
       if (!this.shouldAcceptInbound(from)) {
-        // Reject: return empty TwiML that hangs up
         res.writeHead(200, { "Content-Type": "application/xml" });
         res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+        return;
+      }
+
+      // Enforce concurrent call limit
+      if (this.callManager.getActiveCalls().length >= this.config.calls.maxConcurrent) {
+        res.writeHead(200, { "Content-Type": "application/xml" });
+        res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, all lines are busy. Please try again later.</Say><Hangup/></Response>');
         return;
       }
 
@@ -180,8 +237,8 @@ export class VoiceServer {
       }
       this.callManager.updateStatus(callId, "in-progress");
 
-      // Set inbound call context
-      this.pendingCallContexts.set(callId, {
+      // Set inbound call context (also generates a call token)
+      this.setCallContext(callId, {
         task: "Inbound call — answer and help the caller with whatever they need.",
         direction: "inbound",
         agentName: this.agentName,
@@ -189,7 +246,8 @@ export class VoiceServer {
         inboundSystemPrompt: this.config.inbound.systemPrompt,
       });
 
-      const wsUrl = `${this.config.publicUrl.replace(/^http/, "ws")}/voice/realtime-stream?callId=${encodeURIComponent(callId)}`;
+      const token = this.callTokens.get(callId)!;
+      const wsUrl = `${this.config.publicUrl.replace(/^http/, "ws")}/voice/realtime-stream?callId=${encodeURIComponent(callId)}&token=${token}`;
 
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -213,8 +271,9 @@ export class VoiceServer {
       this.callManager.updateStatus(callId, "in-progress");
     }
 
-    // Return TwiML to connect Twilio to our WebSocket
-    const wsUrl = `${this.config.publicUrl.replace(/^http/, "ws")}/voice/realtime-stream?callId=${encodeURIComponent(callId)}`;
+    // Return TwiML to connect Twilio to our WebSocket (include per-call token)
+    const token = this.callTokens.get(callId) || "";
+    const wsUrl = `${this.config.publicUrl.replace(/^http/, "ws")}/voice/realtime-stream?callId=${encodeURIComponent(callId)}&token=${token}`;
 
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -274,6 +333,7 @@ export class VoiceServer {
             this.bridges.delete(callId);
           }
           this.pendingCallContexts.delete(callId);
+          this.callTokens.delete(callId);
         }
       }
     }
@@ -320,6 +380,7 @@ export class VoiceServer {
     ws.on("close", () => {
       this.bridges.delete(callId);
       this.pendingCallContexts.delete(callId);
+      this.callTokens.delete(callId);
     });
   }
 }
