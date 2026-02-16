@@ -84,17 +84,46 @@ jobs:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
         run: npx -y clawhub@latest login --token "$CLAWHUB_TOKEN" --no-input
 
-      - name: Check existing release
-        id: exists
+      - name: Publish (with retry)
         shell: bash
         run: |
-          if npx -y clawhub@latest inspect "${{ steps.meta.outputs.name }}" --version "${{ steps.meta.outputs.version }}" --json --no-input >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Version already published. Skipping."
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
 
-      - name: Publish
-        if: steps.exists.outputs.exists == 'false'
-        run: npx -y clawhub@latest publish . --version "${{ steps.meta.outputs.version }}" --no-input
+          MAX_ATTEMPTS=5
+          SLEEP_SECONDS=15
+
+          for ATTEMPT in $(seq 1 "$MAX_ATTEMPTS"); do
+            echo "Publish attempt ${ATTEMPT}/${MAX_ATTEMPTS}"
+
+            set +e
+            OUTPUT="$(npx -y clawhub@latest publish . --version "${{ steps.meta.outputs.version }}" --no-input 2>&1)"
+            EXIT_CODE=$?
+            set -e
+
+            echo "$OUTPUT"
+
+            if [[ $EXIT_CODE -eq 0 ]]; then
+              echo "Publish succeeded."
+              exit 0
+            fi
+
+            if echo "$OUTPUT" | grep -qi "already exists"; then
+              echo "Version is already published; treating as success."
+              exit 0
+            fi
+
+            if echo "$OUTPUT" | grep -qi "Rate limit exceeded"; then
+              if [[ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]]; then
+                echo "Rate limited. Sleeping ${SLEEP_SECONDS}s before retry..."
+                sleep "$SLEEP_SECONDS"
+                SLEEP_SECONDS=$((SLEEP_SECONDS * 2))
+                continue
+              fi
+            fi
+
+            echo "Publish failed with a non-retryable error."
+            exit $EXIT_CODE
+          done
+
+          echo "Publish failed after retries."
+          exit 1
