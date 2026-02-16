@@ -82,13 +82,13 @@ jobs:
       - name: Login to ClawHub
         env:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
-        run: bunx --bun clawhub login --token "$CLAWHUB_TOKEN" --no-input
+        run: npx -y clawhub@latest login --token "$CLAWHUB_TOKEN" --no-input
 
       - name: Check existing release
         id: exists
         shell: bash
         run: |
-          if bunx --bun clawhub inspect "${{ steps.meta.outputs.name }}" --version "${{ steps.meta.outputs.version }}" --json --no-input >/dev/null 2>&1; then
+          if npx -y clawhub@latest inspect "${{ steps.meta.outputs.name }}" --version "${{ steps.meta.outputs.version }}" --json --no-input >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "Version already published. Skipping."
           else
@@ -97,4 +97,4 @@ jobs:
 
       - name: Publish
         if: steps.exists.outputs.exists == 'false'
-        run: bunx --bun clawhub publish . --version "${{ steps.meta.outputs.version }}" --no-input
+        run: npx -y clawhub@latest publish . --version "${{ steps.meta.outputs.version }}" --no-input
