@@ -11,6 +11,7 @@ import { checkStatus } from "./status.ts";
 import type { CallContext } from "./prompts.ts";
 
 const MAX_BODY_SIZE = 64 * 1024; // 64KB — Twilio payloads are typically <10KB
+const MACHINE_START_GRACE_SECONDS = 6;
 
 export class VoiceServer {
   private config: PluginConfig;
@@ -47,24 +48,23 @@ export class VoiceServer {
       this.httpServer.on("upgrade", (req, socket, head) => {
         const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
-        if (url.pathname === "/voice/realtime-stream") {
-          // Validate per-call token
-          const callId = url.searchParams.get("callId") || "";
-          const token = url.searchParams.get("token") || "";
-          const expectedToken = this.callTokens.get(callId);
-
-          if (!expectedToken || token !== expectedToken) {
-            socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
-            socket.destroy();
-            return;
-          }
-
-          this.wss!.handleUpgrade(req, socket, head, (ws) => {
-            this.handleWebSocket(ws, url);
-          });
-        } else {
+        const streamAuth = this.extractStreamAuth(url);
+        if (!streamAuth) {
           socket.destroy();
+          return;
         }
+
+        // Validate per-call token
+        const expectedToken = this.callTokens.get(streamAuth.callId);
+        if (!expectedToken || streamAuth.token !== expectedToken) {
+          socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+
+        this.wss!.handleUpgrade(req, socket, head, (ws) => {
+          this.handleWebSocket(ws, url, streamAuth.callId);
+        });
       });
 
       this.httpServer.listen(this.config.server.port, this.config.server.bind, () => {
@@ -218,9 +218,16 @@ export class VoiceServer {
     const callSid = params.get("CallSid");
     const from = params.get("From") || "";
     const to = params.get("To") || "";
+    const answeredBy = params.get("AnsweredBy");
 
     // Check if this is an inbound call (no callId in query = not initiated by us)
     const queryCallId = params.get("callId");
+
+    console.log(
+      `[openclaw-voice-gpt-realtime] /voice/answer direction=${direction || "unknown"} callSid=${
+        callSid || "unknown"
+      } queryCallId=${queryCallId || "none"} from=${from} to=${to} answeredBy=${answeredBy || "unknown"}`
+    );
 
     if (!queryCallId && direction === "inbound") {
       // Inbound call — check policy
@@ -256,7 +263,7 @@ export class VoiceServer {
       });
 
       const token = this.callTokens.get(callId)!;
-      const wsUrl = `${this.config.publicUrl.replace(/^http/, "ws")}/voice/realtime-stream?callId=${encodeURIComponent(callId)}&token=${token}`;
+      const wsUrl = `${this.config.publicUrl.replace(/^http/, "ws")}/voice/realtime-stream/${encodeURIComponent(callId)}/${token}`;
 
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -273,20 +280,67 @@ export class VoiceServer {
     }
 
     // Outbound call (initiated by us)
-    const callId = queryCallId || "unknown";
+    const callId = this.resolveCallId(params);
+
+    if (callId === "unknown") {
+      console.error(
+        `[openclaw-voice-gpt-realtime] Unable to resolve outbound callId for callSid=${callSid || "unknown"}`
+      );
+      res.writeHead(200, { "Content-Type": "application/xml" });
+      res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+      return;
+    }
 
     if (callSid) {
       this.callManager.setCallSid(callId, callSid);
+    }
+
+    if (answeredBy) {
+      this.callManager.setAmdResult(callId, answeredBy);
+    }
+
+    const machineStartDetected = this.isMachineStart(answeredBy);
+    if (this.isHardMachineAnswer(answeredBy)) {
+      console.log(
+        `[openclaw-voice-gpt-realtime] Machine/fax detected at /voice/answer for callId=${callId} callSid=${
+          callSid || "unknown"
+        } answeredBy=${answeredBy}. Hanging up before stream bridge.`
+      );
+      res.writeHead(200, { "Content-Type": "application/xml" });
+      res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+      return;
+    }
+
+    if (machineStartDetected) {
+      console.log(
+        `[openclaw-voice-gpt-realtime] machine_start at /voice/answer for callId=${callId} callSid=${
+          callSid || "unknown"
+        }; applying ${MACHINE_START_GRACE_SECONDS}s grace before stream bridge.`
+      );
+    }
+
+    if (callSid) {
       this.callManager.updateStatus(callId, "in-progress");
     }
 
     // Return TwiML to connect Twilio to our WebSocket (include per-call token)
-    const token = this.callTokens.get(callId) || "";
-    const wsUrl = `${this.config.publicUrl.replace(/^http/, "ws")}/voice/realtime-stream?callId=${encodeURIComponent(callId)}&token=${token}`;
+    const token = this.callTokens.get(callId);
+    if (!token) {
+      console.error(`[openclaw-voice-gpt-realtime] Missing stream token for call ${callId}`);
+      res.writeHead(200, { "Content-Type": "application/xml" });
+      res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+      return;
+    }
+
+    const wsUrl = `${this.config.publicUrl.replace(/^http/, "ws")}/voice/realtime-stream/${encodeURIComponent(callId)}/${token}`;
+
+    const preConnectGrace = machineStartDetected
+      ? `  <Pause length="${MACHINE_START_GRACE_SECONDS}" />\n`
+      : "";
 
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Connect>
+${preConnectGrace}  <Connect>
     <Stream url="${wsUrl}">
       <Parameter name="callId" value="${callId}" />
     </Stream>
@@ -295,6 +349,17 @@ export class VoiceServer {
 
     res.writeHead(200, { "Content-Type": "application/xml" });
     res.end(twiml);
+  }
+
+  private resolveCallId(params: URLSearchParams): string {
+    const queryCallId = params.get("callId");
+    if (queryCallId) return queryCallId;
+
+    const callSid = params.get("CallSid");
+    if (!callSid) return "unknown";
+
+    const record = this.callManager.getByCallSid(callSid);
+    return record?.callId || "unknown";
   }
 
   private shouldAcceptInbound(from: string): boolean {
@@ -314,11 +379,23 @@ export class VoiceServer {
   }
 
   private handleVoiceStatus(params: URLSearchParams, res: import("node:http").ServerResponse): void {
-    const callId = params.get("callId");
+    const callId = this.resolveCallId(params);
     const callSid = params.get("CallSid");
     const callStatus = params.get("CallStatus");
+    const answeredBy = params.get("AnsweredBy");
+    const callDuration = params.get("CallDuration");
 
-    if (callId && callStatus) {
+    console.log(
+      `[openclaw-voice-gpt-realtime] /voice/status callId=${callId} callSid=${callSid || "unknown"} status=${
+        callStatus || "unknown"
+      } answeredBy=${answeredBy || "unknown"} duration=${callDuration || "unknown"}`
+    );
+
+    if (callId !== "unknown" && answeredBy) {
+      this.callManager.setAmdResult(callId, answeredBy);
+    }
+
+    if (callId !== "unknown" && callStatus) {
       const statusMap: Record<string, "ringing" | "in-progress" | "completed" | "failed" | "no-answer" | "busy"> = {
         ringing: "ringing",
         "in-progress": "in-progress",
@@ -334,6 +411,19 @@ export class VoiceServer {
         if (callSid) this.callManager.setCallSid(callId, callSid);
         this.callManager.updateStatus(callId, mappedStatus);
 
+        if (callSid && mappedStatus === "in-progress" && this.isHardMachineAnswer(answeredBy)) {
+          console.log(
+            `[openclaw-voice-gpt-realtime] Machine/fax detected at /voice/status for callId=${callId} callSid=${callSid}; forcing hangup.`
+          );
+          void this.twilioClient.hangup(callSid).catch((err) => {
+            console.error(
+              `[openclaw-voice-gpt-realtime] Failed to hang up machine-answered callSid=${callSid}: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          });
+        }
+
         // Clean up bridge on terminal states
         if (["completed", "failed", "no-answer", "busy"].includes(mappedStatus)) {
           const bridge = this.bridges.get(callId);
@@ -347,27 +437,65 @@ export class VoiceServer {
       }
     }
 
-    res.writeHead(200);
-    res.end();
+    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("ok");
   }
 
   private handleAmd(params: URLSearchParams, res: import("node:http").ServerResponse): void {
-    const callId = params.get("callId");
+    const callId = this.resolveCallId(params);
+    const callSid = params.get("CallSid");
     const answeredBy = params.get("AnsweredBy");
 
-    if (callId && answeredBy) {
-      this.callManager.setAmdResult(callId, answeredBy);
+    console.log(
+      `[openclaw-voice-gpt-realtime] /voice/amd callId=${callId} callSid=${
+        callSid || "unknown"
+      } answeredBy=${answeredBy || "unknown"}`
+    );
 
-      // If it's a machine/voicemail, the model's prompt will handle it naturally
-      // (the system prompt instructs to leave a brief message and hang up)
+    if (callId !== "unknown" && answeredBy) {
+      this.callManager.setAmdResult(callId, answeredBy);
+      if (callSid && this.isHardMachineAnswer(answeredBy)) {
+        console.log(
+          `[openclaw-voice-gpt-realtime] Machine/fax detected at /voice/amd for callId=${callId} callSid=${callSid}; forcing hangup.`
+        );
+        void this.twilioClient.hangup(callSid).catch((err) => {
+          console.error(
+            `[openclaw-voice-gpt-realtime] Failed to hang up machine-answered callSid=${callSid}: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        });
+      }
     }
 
-    res.writeHead(200);
-    res.end();
+    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("ok");
   }
 
-  private handleWebSocket(ws: WebSocket, url: URL): void {
-    const callId = url.searchParams.get("callId") || "unknown";
+  private extractStreamAuth(url: URL): { callId: string; token: string } | null {
+    // Preferred form: /voice/realtime-stream/:callId/:token
+    const pathMatch = url.pathname.match(/^\/voice\/realtime-stream\/([^/]+)\/([A-Fa-f0-9]{64})$/);
+    if (pathMatch) {
+      return {
+        callId: decodeURIComponent(pathMatch[1]),
+        token: pathMatch[2],
+      };
+    }
+
+    // Backward-compatible form (query params); Twilio may strip query params.
+    if (url.pathname === "/voice/realtime-stream") {
+      const callId = url.searchParams.get("callId") || "";
+      const token = url.searchParams.get("token") || "";
+      if (callId && token) {
+        return { callId, token };
+      }
+    }
+
+    return null;
+  }
+
+  private handleWebSocket(ws: WebSocket, url: URL, callIdFromUpgrade?: string): void {
+    const callId = callIdFromUpgrade || url.searchParams.get("callId") || "unknown";
     const callContext = this.pendingCallContexts.get(callId) || {
       task: "General phone call — ask what they need or answer their questions.",
       direction: "outbound" as const,
@@ -391,5 +519,18 @@ export class VoiceServer {
       this.pendingCallContexts.delete(callId);
       this.callTokens.delete(callId);
     });
+  }
+
+  private normalizeAnsweredBy(answeredBy: string | null): string {
+    return (answeredBy || "").trim().toLowerCase();
+  }
+
+  private isMachineStart(answeredBy: string | null): boolean {
+    return this.normalizeAnsweredBy(answeredBy) === "machine_start";
+  }
+
+  private isHardMachineAnswer(answeredBy: string | null): boolean {
+    const normalized = this.normalizeAnsweredBy(answeredBy);
+    return normalized === "fax" || normalized === "machine" || normalized.startsWith("machine_end");
   }
 }
