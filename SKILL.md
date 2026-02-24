@@ -1,7 +1,7 @@
 ---
 name: openclaw-voice-gpt-realtime
 description: Make real phone calls through your OpenClaw agent via OpenAI's Realtime API. ~200-300ms latency, natural voice, IVR navigation, voicemail detection.
-version: 0.1.2
+version: 0.1.3
 homepage: https://github.com/connorcallison/openclaw-voice-gpt-realtime
 metadata:
   openclaw:
