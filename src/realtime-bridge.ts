@@ -135,6 +135,17 @@ export class RealtimeBridge {
   private configureSession(): void {
     const systemPrompt = getSystemPrompt(this.callContext);
 
+    // Always log the system prompt for debugging prompt issues
+    console.log(`\x1b[35m[prompt]\x1b[0m \x1b[2m${this.callId}\x1b[0m direction=${this.callContext.direction} model=${this.config.openai.model} voice=${this.config.openai.voice}`);
+    console.log(`\x1b[35m[prompt]\x1b[0m \x1b[2m${this.callId}\x1b[0m callContext.task=${this.callContext.task}`);
+    if (this.callContext.systemPrompt) {
+      console.log(`\x1b[35m[prompt]\x1b[0m \x1b[2m${this.callId}\x1b[0m callContext.systemPrompt=${this.callContext.systemPrompt.slice(0, 200)}${this.callContext.systemPrompt.length > 200 ? "..." : ""}`);
+    }
+    if (this.callContext.agentName) {
+      console.log(`\x1b[35m[prompt]\x1b[0m \x1b[2m${this.callId}\x1b[0m agentName=${this.callContext.agentName}`);
+    }
+    console.log(`\x1b[35m[prompt]\x1b[0m \x1b[2m${this.callId}\x1b[0m final instructions (${systemPrompt.length} chars):\n${systemPrompt}`);
+
     const sessionConfig: OpenAISessionConfig = {
       type: "session.update",
       session: {
@@ -219,8 +230,12 @@ export class RealtimeBridge {
       delete (sessionConfig.session.turn_detection as Record<string, unknown>).silence_duration_ms;
     }
 
-    this.openaiWs!.send(JSON.stringify(sessionConfig));
+    const sessionPayload = JSON.stringify(sessionConfig);
+    this.openaiWs!.send(sessionPayload);
     this.debug.logOpenAI("session.update", "configured");
+    if (this.config.debug) {
+      console.log(`\x1b[35m[prompt]\x1b[0m \x1b[2m${this.callId}\x1b[0m full session.update payload:\n${JSON.stringify(sessionConfig, null, 2)}`);
+    }
 
     if (this.callContext.direction === "inbound" && this.callContext.greeting) {
       // Inbound: speak the greeting immediately

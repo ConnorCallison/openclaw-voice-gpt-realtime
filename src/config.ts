@@ -8,7 +8,7 @@ export const TwilioConfigSchema = z.object({
 
 export const OpenAIConfigSchema = z.object({
   apiKey: z.string().min(1, "OpenAI API key is required"),
-  model: z.string().default("gpt-realtime"),
+  model: z.string().default("gpt-realtime-1.5"),
   voice: z
     .enum(["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"])
     .default("coral"),
