@@ -3,7 +3,7 @@
   "name": "openclaw-voice-gpt-realtime",
   "displayName": "Voice Calls (OpenAI Realtime)",
   "description": "Ultra-low-latency AI phone calls powered by OpenAI's Realtime API. Single-model speech-to-speech with ~200-300ms latency.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "author": "Connor Callison",
   "license": "MIT",
   "homepage": "https://github.com/connorcallison/openclaw-voice-gpt-realtime",
